@@ -30,6 +30,7 @@ function Fretscape(containerEl) {
   this._isMousePanning = false;
   this._panLastClient = null;
   this._touchGesture = null;
+  this._pendingDragCopy = null;
   this._audioCtx = null;
   this._audioCtxUnavailable = false;
   var self = this;
@@ -366,11 +367,70 @@ Fretscape.prototype._getEventCoords = function (e) {
   return { x: e.clientX, y: e.clientY };
 };
 
+/** Hold duration required before drag-copy starts. */
+var DRAG_HOLD_DELAY_MS = 1000;
+/** Max pointer drift while holding before drag-copy is cancelled (in cw units). */
+var DRAG_HOLD_MOVE_TOLERANCE_CW = 0.35;
+
 /**
  * Binds mouse and touch handlers for drag.
  */
 Fretscape.prototype._bindInput = function () {
   var self = this;
+  var cancelPendingDragCopy = function () {
+    if (!self._pendingDragCopy) return;
+    if (self._pendingDragCopy.timerId !== null && self._pendingDragCopy.timerId !== undefined) {
+      window.clearTimeout(self._pendingDragCopy.timerId);
+    }
+    self._pendingDragCopy = null;
+  };
+  var startDragCopyFromIndex = function (idx, pointerCw, pointerClient) {
+    if (idx < 0 || idx >= self.bricks.length) return;
+    var item = self.bricks[idx];
+    if (!item || !item.brick) return;
+    var off = self._getBrickOriginOffset(item.brick);
+    var originX = item.xCw + off.col;
+    var originY = item.yCw + off.row;
+    self._dragItem = {
+      brick: item.brick.clone(),
+      xCw: item.xCw,
+      yCw: item.yCw,
+      originCol: off.col,
+      originRow: off.row
+    };
+    self._isCreating = true;
+    self.bricks.push(self._dragItem);
+    self._offsetCw = { x: pointerCw.x - originX, y: pointerCw.y - originY };
+    var snappedOrigin = self._snapToLattice(originX, originY, off);
+    self._dragItem.xCw = snappedOrigin.x - off.col;
+    self._dragItem.yCw = snappedOrigin.y - off.row;
+    self._dragStartOrigin = { x: snappedOrigin.x, y: snappedOrigin.y };
+    self._doMove(pointerClient.x, pointerClient.y);
+  };
+  var queueDragCopyHold = function (idx, cw, client) {
+    cancelPendingDragCopy();
+    var pending = {
+      idx: idx,
+      startCwX: cw.x,
+      startCwY: cw.y,
+      lastCwX: cw.x,
+      lastCwY: cw.y,
+      lastClientX: client.x,
+      lastClientY: client.y,
+      timerId: null
+    };
+    pending.timerId = window.setTimeout(function () {
+      if (self._pendingDragCopy !== pending) return;
+      pending.timerId = null;
+      self._pendingDragCopy = null;
+      startDragCopyFromIndex(
+        pending.idx,
+        { x: pending.lastCwX, y: pending.lastCwY },
+        { x: pending.lastClientX, y: pending.lastClientY }
+      );
+    }, DRAG_HOLD_DELAY_MS);
+    self._pendingDragCopy = pending;
+  };
   var finishDrag = function () {
     if (!self._dragItem) return false;
     var off = { col: self._dragItem.originCol, row: self._dragItem.originRow };
@@ -389,12 +449,14 @@ Fretscape.prototype._bindInput = function () {
     var isTouch = e.type.indexOf("touch") === 0;
     if (!self.cellWidth) return;
     if (!isTouch && e.button === 1) {
+      cancelPendingDragCopy();
       self._isMousePanning = true;
       self._panLastClient = { x: e.clientX, y: e.clientY };
       e.preventDefault();
       return;
     }
     if (isTouch && e.touches && e.touches.length >= 2) {
+      cancelPendingDragCopy();
       if (self._dragItem) {
         finishDrag();
       }
@@ -406,27 +468,16 @@ Fretscape.prototype._bindInput = function () {
     if (isTouch && e.touches && e.touches.length !== 1) return;
     var coords = self._getEventCoords(e);
     var cw = self._pxToCw(coords.x, coords.y);
+    var idx = self._hitTest(cw.x, cw.y);
+    if (idx < 0) {
+      cancelPendingDragCopy();
+      return;
+    }
     var dotHit = self._hitDot(cw.x, cw.y);
     if (dotHit) {
       self._playDotTone(dotHit.xCw, dotHit.yCw);
-      e.preventDefault();
-      return;
     }
-    var idx = self._hitTest(cw.x, cw.y);
-    if (idx < 0) return;
-    var item = self.bricks[idx];
-    var off = self._getBrickOriginOffset(item.brick);
-    var originX = item.xCw + off.col;
-    var originY = item.yCw + off.row;
-    self._dragItem = { brick: item.brick.clone(), xCw: item.xCw, yCw: item.yCw, originCol: off.col, originRow: off.row };
-    self._isCreating = true;
-    self.bricks.push(self._dragItem);
-    self._offsetCw = { x: cw.x - originX, y: cw.y - originY };
-    var snappedOrigin = self._snapToLattice(originX, originY, off);
-    self._dragItem.xCw = snappedOrigin.x - off.col;
-    self._dragItem.yCw = snappedOrigin.y - off.row;
-    self._dragStartOrigin = { x: snappedOrigin.x, y: snappedOrigin.y };
-    self._doMove(coords.x, coords.y);
+    queueDragCopyHold(idx, cw, coords);
     e.preventDefault();
   };
   var move = function (e) {
@@ -451,6 +502,25 @@ Fretscape.prototype._bindInput = function () {
       }
       self._touchGesture = null;
     }
+    if (self._pendingDragCopy) {
+      if (!isTouch && e.buttons === 0) {
+        cancelPendingDragCopy();
+        return;
+      }
+      var holdCoords = self._getEventCoords(e);
+      var holdCw = self._pxToCw(holdCoords.x, holdCoords.y);
+      self._pendingDragCopy.lastClientX = holdCoords.x;
+      self._pendingDragCopy.lastClientY = holdCoords.y;
+      self._pendingDragCopy.lastCwX = holdCw.x;
+      self._pendingDragCopy.lastCwY = holdCw.y;
+      var dx = holdCw.x - self._pendingDragCopy.startCwX;
+      var dy = holdCw.y - self._pendingDragCopy.startCwY;
+      if (dx * dx + dy * dy > DRAG_HOLD_MOVE_TOLERANCE_CW * DRAG_HOLD_MOVE_TOLERANCE_CW) {
+        cancelPendingDragCopy();
+      }
+      e.preventDefault();
+      return;
+    }
     if (!self._dragItem) return;
     self._doMove(self._getEventCoords(e).x, self._getEventCoords(e).y);
     e.preventDefault();
@@ -469,6 +539,11 @@ Fretscape.prototype._bindInput = function () {
       } else {
         self._beginTouchGesture(e.touches);
       }
+      e.preventDefault();
+      return;
+    }
+    if (self._pendingDragCopy) {
+      cancelPendingDragCopy();
       e.preventDefault();
       return;
     }
