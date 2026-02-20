@@ -468,14 +468,17 @@ Fretscape.prototype._bindInput = function () {
     if (isTouch && e.touches && e.touches.length !== 1) return;
     var coords = self._getEventCoords(e);
     var cw = self._pxToCw(coords.x, coords.y);
+    var dotHit = self._hitDot(cw.x, cw.y);
+    if (dotHit) {
+      self._playDotTone(dotHit.xCw, dotHit.yCw);
+      queueDragCopyHold(dotHit.brickIndex, cw, coords);
+      e.preventDefault();
+      return;
+    }
     var idx = self._hitTest(cw.x, cw.y);
     if (idx < 0) {
       cancelPendingDragCopy();
       return;
-    }
-    var dotHit = self._hitDot(cw.x, cw.y);
-    if (dotHit) {
-      self._playDotTone(dotHit.xCw, dotHit.yCw);
     }
     queueDragCopyHold(idx, cw, coords);
     e.preventDefault();
