@@ -1,7 +1,8 @@
 /**
  * Fretscape - Owns a canvas and draws bricks to it. All coordinates in cellWidth units.
  * Canvas = 25 cells wide, 15 cells tall. Bricks get cellWidth from Fretscape.
- * Click-drag inside brick creates new brick; drag on brick moves it. Touch supported.
+ * Click-drag inside brick creates new brick; drag on brick moves it.
+ * Supports wheel/pinch zoom and middle-mouse/two-finger panning.
  */
 function Fretscape(containerEl) {
   this.container = containerEl;
@@ -19,6 +20,13 @@ function Fretscape(containerEl) {
   this._offsetCw = { x: 0, y: 0 };
   this._dragStartOrigin = null; /* lattice point (x,y) cw where active drag line is anchored */
   this._dragConstraintVector = { x: 2, y: -2 }; /* default 2x2 slope constraint */
+  this._viewScale = 1;
+  this._viewPanPx = { x: 0, y: 0 };
+  this._minViewScale = 0.5;
+  this._maxViewScale = 4;
+  this._isMousePanning = false;
+  this._panLastClient = null;
+  this._touchGesture = null;
   var self = this;
   window.addEventListener("resize", function () { self.render(); });
   this._bindInput();
@@ -58,15 +66,96 @@ Fretscape.prototype._fitCellWidth = function () {
 };
 
 /**
+ * Converts viewport pixels to canvas-local pixels.
+ */
+Fretscape.prototype._clientToCanvasPx = function (px, py) {
+  var rect = this.canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  return {
+    x: (px - rect.left) * (this.canvas.width / rect.width),
+    y: (py - rect.top) * (this.canvas.height / rect.height)
+  };
+};
+
+/**
+ * Clamps view scale to configured limits.
+ */
+Fretscape.prototype._clampViewScale = function (scale) {
+  return Math.max(this._minViewScale, Math.min(this._maxViewScale, scale));
+};
+
+/**
+ * Zooms around a viewport point and keeps that world point fixed on screen.
+ */
+Fretscape.prototype._zoomAtClientPoint = function (factor, clientX, clientY) {
+  if (!factor || factor <= 0) return;
+  var local = this._clientToCanvasPx(clientX, clientY);
+  if (!local) return;
+  var oldScale = this._viewScale;
+  var nextScale = this._clampViewScale(oldScale * factor);
+  if (Math.abs(nextScale - oldScale) < 0.000001) return;
+  var worldX = (local.x - this._viewPanPx.x) / oldScale;
+  var worldY = (local.y - this._viewPanPx.y) / oldScale;
+  this._viewScale = nextScale;
+  this._viewPanPx.x = local.x - worldX * nextScale;
+  this._viewPanPx.y = local.y - worldY * nextScale;
+  this.render();
+};
+
+/**
+ * Starts a two-touch pan/zoom gesture.
+ */
+Fretscape.prototype._beginTouchGesture = function (touches) {
+  if (!touches || touches.length < 2) return;
+  var t0 = touches[0];
+  var t1 = touches[1];
+  var centerX = (t0.clientX + t1.clientX) / 2;
+  var centerY = (t0.clientY + t1.clientY) / 2;
+  var center = this._clientToCanvasPx(centerX, centerY);
+  if (!center) return;
+  var dx = t1.clientX - t0.clientX;
+  var dy = t1.clientY - t0.clientY;
+  var dist = Math.sqrt(dx * dx + dy * dy);
+  this._touchGesture = {
+    startDistance: dist > 0.000001 ? dist : 1,
+    startScale: this._viewScale,
+    anchorWorldX: (center.x - this._viewPanPx.x) / this._viewScale,
+    anchorWorldY: (center.y - this._viewPanPx.y) / this._viewScale
+  };
+};
+
+/**
+ * Updates two-touch gesture (pinch zoom + center-point pan).
+ */
+Fretscape.prototype._updateTouchGesture = function (touches) {
+  if (!this._touchGesture || !touches || touches.length < 2) return;
+  var t0 = touches[0];
+  var t1 = touches[1];
+  var centerX = (t0.clientX + t1.clientX) / 2;
+  var centerY = (t0.clientY + t1.clientY) / 2;
+  var center = this._clientToCanvasPx(centerX, centerY);
+  if (!center) return;
+  var dx = t1.clientX - t0.clientX;
+  var dy = t1.clientY - t0.clientY;
+  var dist = Math.sqrt(dx * dx + dy * dy);
+  var scaleFactor = (dist > 0.000001 ? dist : 1) / this._touchGesture.startDistance;
+  var nextScale = this._clampViewScale(this._touchGesture.startScale * scaleFactor);
+  this._viewScale = nextScale;
+  this._viewPanPx.x = center.x - this._touchGesture.anchorWorldX * nextScale;
+  this._viewPanPx.y = center.y - this._touchGesture.anchorWorldY * nextScale;
+  this.render();
+};
+
+/**
  * Converts pixel coords to logical coords (cw units).
  */
 Fretscape.prototype._pxToCw = function (px, py) {
-  var rect = this.canvas.getBoundingClientRect();
-  var scaleX = this.canvas.width / rect.width;
-  var scaleY = this.canvas.height / rect.height;
-  var localPx = (px - rect.left) * scaleX;
-  var localPy = (py - rect.top) * scaleY;
-  return { x: localPx / this.cellWidth, y: localPy / this.cellWidth };
+  var local = this._clientToCanvasPx(px, py);
+  if (!local) return { x: 0, y: 0 };
+  var viewScale = this._viewScale || 1;
+  var worldPxX = (local.x - this._viewPanPx.x) / viewScale;
+  var worldPxY = (local.y - this._viewPanPx.y) / viewScale;
+  return { x: worldPxX / this.cellWidth, y: worldPxY / this.cellWidth };
 };
 
 /**
@@ -101,8 +190,39 @@ Fretscape.prototype._getEventCoords = function (e) {
  */
 Fretscape.prototype._bindInput = function () {
   var self = this;
+  var finishDrag = function () {
+    if (!self._dragItem) return false;
+    var off = { col: self._dragItem.originCol, row: self._dragItem.originRow };
+    var originX = self._dragItem.xCw + off.col;
+    var originY = self._dragItem.yCw + off.row;
+    var snappedOrigin = self._snapToLattice(originX, originY, off);
+    self._dragItem.xCw = snappedOrigin.x - off.col;
+    self._dragItem.yCw = snappedOrigin.y - off.row;
+    self._dragItem = null;
+    self._isCreating = false;
+    self._dragStartOrigin = null;
+    self.render();
+    return true;
+  };
   var start = function (e) {
+    var isTouch = e.type.indexOf("touch") === 0;
     if (!self.cellWidth) return;
+    if (!isTouch && e.button === 1) {
+      self._isMousePanning = true;
+      self._panLastClient = { x: e.clientX, y: e.clientY };
+      e.preventDefault();
+      return;
+    }
+    if (isTouch && e.touches && e.touches.length >= 2) {
+      if (self._dragItem) {
+        finishDrag();
+      }
+      self._beginTouchGesture(e.touches);
+      e.preventDefault();
+      return;
+    }
+    if (!isTouch && e.button !== 0) return;
+    if (isTouch && e.touches && e.touches.length !== 1) return;
     var coords = self._getEventCoords(e);
     var cw = self._pxToCw(coords.x, coords.y);
     var idx = self._hitTest(cw.x, cw.y);
@@ -123,22 +243,56 @@ Fretscape.prototype._bindInput = function () {
     e.preventDefault();
   };
   var move = function (e) {
+    var isTouch = e.type.indexOf("touch") === 0;
+    if (!isTouch && self._isMousePanning && self._panLastClient) {
+      var localNow = self._clientToCanvasPx(e.clientX, e.clientY);
+      var localLast = self._clientToCanvasPx(self._panLastClient.x, self._panLastClient.y);
+      if (localNow && localLast) {
+        self._viewPanPx.x += localNow.x - localLast.x;
+        self._viewPanPx.y += localNow.y - localLast.y;
+        self._panLastClient = { x: e.clientX, y: e.clientY };
+        self.render();
+      }
+      e.preventDefault();
+      return;
+    }
+    if (isTouch && self._touchGesture) {
+      if (e.touches && e.touches.length >= 2) {
+        self._updateTouchGesture(e.touches);
+        e.preventDefault();
+        return;
+      }
+      self._touchGesture = null;
+    }
     if (!self._dragItem) return;
     self._doMove(self._getEventCoords(e).x, self._getEventCoords(e).y);
     e.preventDefault();
   };
   var end = function (e) {
-    if (!self._dragItem) return;
-    var off = { col: self._dragItem.originCol, row: self._dragItem.originRow };
-    var originX = self._dragItem.xCw + off.col;
-    var originY = self._dragItem.yCw + off.row;
-    var snappedOrigin = self._snapToLattice(originX, originY, off);
-    self._dragItem.xCw = snappedOrigin.x - off.col;
-    self._dragItem.yCw = snappedOrigin.y - off.row;
-    self._dragItem = null;
-    self._isCreating = false;
-    self._dragStartOrigin = null;
-    self.render();
+    var isTouch = e.type.indexOf("touch") === 0;
+    if (!isTouch && self._isMousePanning) {
+      self._isMousePanning = false;
+      self._panLastClient = null;
+      e.preventDefault();
+      return;
+    }
+    if (isTouch && self._touchGesture) {
+      if (!e.touches || e.touches.length < 2) {
+        self._touchGesture = null;
+      } else {
+        self._beginTouchGesture(e.touches);
+      }
+      e.preventDefault();
+      return;
+    }
+    if (finishDrag()) {
+      e.preventDefault();
+    }
+  };
+  var wheel = function (e) {
+    /* Negative deltaY zooms in; positive zooms out. */
+    var factor = Math.exp(-e.deltaY * 0.0015);
+    self._zoomAtClientPoint(factor, e.clientX, e.clientY);
     e.preventDefault();
   };
   this.canvas.addEventListener("mousedown", start);
@@ -148,6 +302,7 @@ Fretscape.prototype._bindInput = function () {
   window.addEventListener("touchmove", move, { passive: false });
   window.addEventListener("touchend", end, { passive: false });
   window.addEventListener("touchcancel", end, { passive: false });
+  this.canvas.addEventListener("wheel", wheel, { passive: false });
 };
 
 /**
@@ -345,10 +500,13 @@ Fretscape.prototype.render = function () {
   this.canvas.width = this._cwToPx(this.widthCw);
   this.canvas.height = this._cwToPx(this.heightCw);
 
+  this.ctx.setTransform(1, 0, 0, 1, 0, 0);
   this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+  this.ctx.setTransform(this._viewScale, 0, 0, this._viewScale, this._viewPanPx.x, this._viewPanPx.y);
   this._drawGrid();
   for (var i = 0; i < this.bricks.length; i++) {
     var item = this.bricks[i];
     item.brick.render(this.ctx, this._cwToPx(item.xCw), this._cwToPx(item.yCw));
   }
+  this.ctx.setTransform(1, 0, 0, 1, 0, 0);
 };
