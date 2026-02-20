@@ -30,6 +30,8 @@ function Fretscape(containerEl) {
   this._isMousePanning = false;
   this._panLastClient = null;
   this._touchGesture = null;
+  this._audioCtx = null;
+  this._audioCtxUnavailable = false;
   var self = this;
   window.addEventListener("resize", function () { self.render(); });
   this._bindInput();
@@ -285,12 +287,70 @@ Fretscape.prototype._dotToDisplayCoord = function (dotX, dotY) {
 };
 
 /**
- * Alerts a dot coordinate tuple "(x, y)".
+ * Returns semitone index of selected key relative to A.
  */
-Fretscape.prototype._alertDotCoordinate = function (dotX, dotY) {
-  if (typeof window === "undefined" || typeof window.alert !== "function") return;
+Fretscape.prototype._getKeySemitoneFromA = function () {
+  var key = this._musicalKey || "A";
+  var map = {
+    "A": 0,
+    "A#": 1,
+    "B": 2,
+    "C": 3,
+    "C#": 4,
+    "D": 5,
+    "D#": 6,
+    "E": 7,
+    "F": 8,
+    "F#": 9,
+    "G": 10,
+    "G#": 11
+  };
+  return map.hasOwnProperty(key) ? map[key] : 0;
+};
+
+/**
+ * Lazily initializes and returns the Web Audio context.
+ */
+Fretscape.prototype._getAudioContext = function () {
+  if (this._audioCtxUnavailable) return null;
+  if (this._audioCtx) return this._audioCtx;
+  if (typeof window === "undefined") return null;
+  var AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) {
+    this._audioCtxUnavailable = true;
+    return null;
+  }
+  this._audioCtx = new AudioCtx();
+  return this._audioCtx;
+};
+
+/**
+ * Plays a 200ms tone using semitone offset (x + 5*y) from selected key root.
+ */
+Fretscape.prototype._playDotTone = function (dotX, dotY) {
   var coord = this._dotToDisplayCoord(dotX, dotY);
-  window.alert("(" + coord.x + ", " + coord.y + ")");
+  var semitoneOffset = coord.x + 5 * coord.y;
+  var rootFromA = this._getKeySemitoneFromA();
+  var semitoneFromA4 = rootFromA + semitoneOffset;
+  var frequency = 440 * Math.pow(2, semitoneFromA4 / 12);
+  frequency = Math.max(20, Math.min(20000, frequency));
+  var ctx = this._getAudioContext();
+  if (!ctx) return;
+  if (ctx.state === "suspended" && ctx.resume) {
+    ctx.resume();
+  }
+  var now = ctx.currentTime;
+  var osc = ctx.createOscillator();
+  var gain = ctx.createGain();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(frequency, now);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.16, now + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(now);
+  osc.stop(now + 0.205);
 };
 
 /**
@@ -348,7 +408,7 @@ Fretscape.prototype._bindInput = function () {
     var cw = self._pxToCw(coords.x, coords.y);
     var dotHit = self._hitDot(cw.x, cw.y);
     if (dotHit) {
-      self._alertDotCoordinate(dotHit.xCw, dotHit.yCw);
+      self._playDotTone(dotHit.xCw, dotHit.yCw);
       e.preventDefault();
       return;
     }
