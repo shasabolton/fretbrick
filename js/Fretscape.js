@@ -7,7 +7,7 @@
 function Fretscape(containerEl) {
   this.container = containerEl;
   this.bricks = [];
-  this._musicalKey = "A";
+  this._musicalKey = "C";
   this._isLeftHanded = false;
   this._isVerticallyMirrored = false;
   this.cellWidth = 80;
@@ -33,6 +33,7 @@ function Fretscape(containerEl) {
   this._pendingDragCopy = null;
   this._audioCtx = null;
   this._audioCtxUnavailable = false;
+  this._guitarWave = null;
   var self = this;
   window.addEventListener("resize", function () { self.render(); });
   this._bindInput();
@@ -288,25 +289,37 @@ Fretscape.prototype._dotToDisplayCoord = function (dotX, dotY) {
 };
 
 /**
- * Returns semitone index of selected key relative to A.
+ * Returns semitone index of selected key relative to low E (E2).
  */
-Fretscape.prototype._getKeySemitoneFromA = function () {
-  var key = this._musicalKey || "A";
+Fretscape.prototype._getKeySemitoneFromLowE = function () {
+  var key = this._musicalKey || "C";
   var map = {
-    "A": 0,
-    "A#": 1,
-    "B": 2,
-    "C": 3,
-    "C#": 4,
-    "D": 5,
-    "D#": 6,
-    "E": 7,
-    "F": 8,
-    "F#": 9,
-    "G": 10,
-    "G#": 11
+    "E": 0,
+    "F": 1,
+    "F#": 2,
+    "G": 3,
+    "G#": 4,
+    "A": 5,
+    "A#": 6,
+    "B": 7,
+    "C": 8,
+    "C#": 9,
+    "D": 10,
+    "D#": 11
   };
-  return map.hasOwnProperty(key) ? map[key] : 0;
+  return map.hasOwnProperty(key) ? map[key] : map.C;
+};
+
+/**
+ * Returns a cached harmonic waveform with a guitar-like timbre.
+ */
+Fretscape.prototype._getGuitarPeriodicWave = function (ctx) {
+  if (!ctx) return null;
+  if (this._guitarWave) return this._guitarWave;
+  var real = new Float32Array([0, 1, 0.65, 0.38, 0.25, 0.16, 0.1, 0.06, 0.03]);
+  var imag = new Float32Array(real.length);
+  this._guitarWave = ctx.createPeriodicWave(real, imag);
+  return this._guitarWave;
 };
 
 /**
@@ -326,15 +339,16 @@ Fretscape.prototype._getAudioContext = function () {
 };
 
 /**
- * Plays a 200ms tone using semitone offset (x + 5*y) from selected key root.
+ * Plays a plucked tone from semitone offset (x + 5*y) and wraps to E..D#.
  */
 Fretscape.prototype._playDotTone = function (dotX, dotY) {
   var coord = this._dotToDisplayCoord(dotX, dotY);
   var semitoneOffset = coord.x + 5 * coord.y;
-  var rootFromA = this._getKeySemitoneFromA();
-  var semitoneFromA4 = rootFromA + semitoneOffset;
-  var frequency = 440 * Math.pow(2, semitoneFromA4 / 12);
-  frequency = Math.max(20, Math.min(20000, frequency));
+  var rootFromLowE = this._getKeySemitoneFromLowE();
+  var semitoneFromLowE = rootFromLowE + semitoneOffset;
+  var wrappedSemitone = ((semitoneFromLowE % 12) + 12) % 12;
+  var lowEFrequencyHz = 82.4068892282175; /* E2, standard guitar low E. */
+  var frequency = lowEFrequencyHz * Math.pow(2, wrappedSemitone / 12);
   var ctx = this._getAudioContext();
   if (!ctx) return;
   if (ctx.state === "suspended" && ctx.resume) {
@@ -342,16 +356,35 @@ Fretscape.prototype._playDotTone = function (dotX, dotY) {
   }
   var now = ctx.currentTime;
   var osc = ctx.createOscillator();
+  var wave = this._getGuitarPeriodicWave(ctx);
+  var toneFilter = ctx.createBiquadFilter();
+  var bodyFilter = ctx.createBiquadFilter();
   var gain = ctx.createGain();
-  osc.type = "sine";
-  osc.frequency.setValueAtTime(frequency, now);
+  if (wave && osc.setPeriodicWave) {
+    osc.setPeriodicWave(wave);
+  } else {
+    osc.type = "triangle";
+  }
+  osc.frequency.setValueAtTime(frequency * 1.006, now);
+  osc.frequency.exponentialRampToValueAtTime(frequency, now + 0.03);
+  toneFilter.type = "lowpass";
+  toneFilter.frequency.setValueAtTime(2600, now);
+  toneFilter.frequency.exponentialRampToValueAtTime(1200, now + 0.3);
+  toneFilter.Q.value = 1.2;
+  bodyFilter.type = "peaking";
+  bodyFilter.frequency.value = 190;
+  bodyFilter.Q.value = 0.9;
+  bodyFilter.gain.value = 4;
   gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(0.16, now + 0.01);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
-  osc.connect(gain);
+  gain.gain.exponentialRampToValueAtTime(0.22, now + 0.004);
+  gain.gain.exponentialRampToValueAtTime(0.075, now + 0.08);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.65);
+  osc.connect(toneFilter);
+  toneFilter.connect(bodyFilter);
+  bodyFilter.connect(gain);
   gain.connect(ctx.destination);
   osc.start(now);
-  osc.stop(now + 0.205);
+  osc.stop(now + 0.7);
 };
 
 /**

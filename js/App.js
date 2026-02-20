@@ -11,12 +11,12 @@
   var isHorizontallyMirrored = false;
   var isVerticallyMirrored = false;
   if (keySelect) {
-    fretscape.setKey(keySelect.value || "A");
+    fretscape.setKey(keySelect.value || "C");
     keySelect.addEventListener("change", function () {
-      fretscape.setKey(keySelect.value || "A");
+      fretscape.setKey(keySelect.value || "C");
     });
   } else {
-    fretscape.setKey("A");
+    fretscape.setKey("C");
   }
   if (handednessToggle) {
     var syncHandednessButton = function () {
