@@ -17,6 +17,7 @@ function Fretscape(containerEl) {
   this._dragItem = null;
   this._isCreating = false;
   this._offsetCw = { x: 0, y: 0 };
+  this._dragStartOrigin = null; /* lattice point (x,y) cw where 2,-2 drag line is anchored */
   var self = this;
   window.addEventListener("resize", function () { self.render(); });
   this._bindInput();
@@ -106,6 +107,10 @@ Fretscape.prototype._bindInput = function () {
     self._isCreating = true;
     self.bricks.push(self._dragItem);
     self._offsetCw = { x: cw.x - originX, y: cw.y - originY };
+    var snappedOrigin = self._snapToLattice(originX, originY, off);
+    self._dragItem.xCw = snappedOrigin.x - off.col;
+    self._dragItem.yCw = snappedOrigin.y - off.row;
+    self._dragStartOrigin = { x: snappedOrigin.x, y: snappedOrigin.y };
     self._doMove(coords.x, coords.y);
     e.preventDefault();
   };
@@ -124,6 +129,7 @@ Fretscape.prototype._bindInput = function () {
     self._dragItem.yCw = snappedOrigin.y - off.row;
     self._dragItem = null;
     self._isCreating = false;
+    self._dragStartOrigin = null;
     self.render();
     e.preventDefault();
   };
@@ -196,43 +202,33 @@ Fretscape.prototype._snapToLattice = function (originX, originY, originOffset) {
   return best;
 };
 
+/** Snap to intersection when within this many cw of the nearest lattice point (on the 2,-2 line). */
+var DRAG_SNAP_RADIUS_CW = 0.5;
+
 /**
- * Updates drag item position. Brick origin may only lie on sloped lines: project desired onto nearest of the two lines through previous origin.
+ * Updates drag item position. Constrains to the (2,-2) line only. Smooth motion along the line; snaps to intersection when within DRAG_SNAP_RADIUS_CW.
  */
 Fretscape.prototype._doMove = function (clientX, clientY) {
-  if (!this._dragItem) return;
+  if (!this._dragItem || !this._dragStartOrigin) return;
   var cw = this._pxToCw(clientX, clientY);
   var desiredX = cw.x - this._offsetCw.x;
   var desiredY = cw.y - this._offsetCw.y;
-  var prevX = this._dragItem.xCw + this._dragItem.originCol;
-  var prevY = this._dragItem.yCw + this._dragItem.originRow;
-  var dx = desiredX - prevX;
-  var dy = desiredY - prevY;
-  var v1x = 2;
-  var v1y = -2;
-  var v2x = 5;
-  var v2y = 1;
-  var v1LenSq = v1x * v1x + v1y * v1y;
-  var v2LenSq = v2x * v2x + v2y * v2y;
-  var t1 = (dx * v1x + dy * v1y) / v1LenSq;
-  var t2 = (dx * v2x + dy * v2y) / v2LenSq;
-  /* Only allow integer steps along each line so origin stays on lattice and moves along grid lines. */
-  var k1 = Math.round(t1);
-  var k2 = Math.round(t2);
-  var p1x = prevX + k1 * v1x;
-  var p1y = prevY + k1 * v1y;
-  var p2x = prevX + k2 * v2x;
-  var p2y = prevY + k2 * v2y;
-  var d1Sq = (desiredX - p1x) * (desiredX - p1x) + (desiredY - p1y) * (desiredY - p1y);
-  var d2Sq = (desiredX - p2x) * (desiredX - p2x) + (desiredY - p2y) * (desiredY - p2y);
-  var ox;
-  var oy;
-  if (d1Sq <= d2Sq) {
-    ox = p1x;
-    oy = p1y;
-  } else {
-    ox = p2x;
-    oy = p2y;
+  var sx = this._dragStartOrigin.x;
+  var sy = this._dragStartOrigin.y;
+  var vx = 2;
+  var vy = -2;
+  var vLenSq = vx * vx + vy * vy;
+  /* Project desired onto line: start + t*(2,-2). t in cw. */
+  var t = ((desiredX - sx) * vx + (desiredY - sy) * vy) / vLenSq;
+  var ox = sx + t * vx;
+  var oy = sy + t * vy;
+  /* Snap to nearest intersection when within 1/2 cellWidth. On this line, lattice points are at start + k*(2,-2); distance to nearest = |t - round(t)| * length(2,-2). */
+  var stepLen = Math.sqrt(vLenSq);
+  var distToNearest = Math.abs(t - Math.round(t)) * stepLen;
+  if (distToNearest <= DRAG_SNAP_RADIUS_CW) {
+    var k = Math.round(t);
+    ox = sx + k * vx;
+    oy = sy + k * vy;
   }
   this._dragItem.xCw = ox - this._dragItem.originCol;
   this._dragItem.yCw = oy - this._dragItem.originRow;
