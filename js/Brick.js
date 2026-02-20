@@ -53,7 +53,21 @@ Brick.prototype.render = function (ctx, x, y) {
   var isBlackCol = function (c) { return c === 0 || c === midCol || c === cols - 1; };
   var radius = this.cellWidth * 0.4;
   var strokeW = this.cellWidth * 0.0125;
+  var borderStrokeW = this.cellWidth * 0.025;
   var fontSize = this.cellWidth * 0.35;
+
+  if (cols > 0 && rows > 0) {
+    var borderOffset = this.cellWidth * 0.5;
+    var left = x - borderOffset;
+    var top = y - borderOffset;
+    var width = (cols - 1) * this.cellWidth + borderOffset * 2;
+    var height = (rows - 1) * this.cellWidth + borderOffset * 2;
+    ctx.beginPath();
+    ctx.rect(left, top, width, height);
+    ctx.strokeStyle = "#333";
+    ctx.lineWidth = borderStrokeW;
+    ctx.stroke();
+  }
 
   for (var r = 0; r < rows; r++) {
     for (var c = 0; c < this.cellData[r].length; c++) {
