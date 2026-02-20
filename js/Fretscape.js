@@ -2,13 +2,14 @@
  * Fretscape - Owns a canvas and draws bricks to it. All coordinates in cellWidth units.
  * Canvas = 25 cells wide, 15 cells tall. Bricks get cellWidth from Fretscape.
  * Click-drag inside brick creates new brick; drag on brick moves it.
- * Supports wheel/pinch zoom and middle-mouse/two-finger panning.
+ * Supports wheel/pinch zoom, panning, and optional axis mirroring.
  */
 function Fretscape(containerEl) {
   this.container = containerEl;
   this.bricks = [];
   this._musicalKey = "A";
   this._isLeftHanded = false;
+  this._isVerticallyMirrored = false;
   this.cellWidth = 80;
   this.widthCw = 25;
   this.heightCw = 15;
@@ -68,6 +69,14 @@ Fretscape.prototype.setLeftHanded = function (isLeftHanded) {
 };
 
 /**
+ * Flips coordinate system vertically when true.
+ */
+Fretscape.prototype.setVerticalMirrored = function (isVerticalMirrored) {
+  this._isVerticallyMirrored = !!isVerticalMirrored;
+  this.render();
+};
+
+/**
  * Converts logical coords (cw units) to pixels. All positioning scales by cellWidth.
  */
 Fretscape.prototype._cwToPx = function (cw) {
@@ -93,6 +102,27 @@ Fretscape.prototype._displayXToWorldX = function (xCw) {
  */
 Fretscape.prototype._xCwToPx = function (xCw) {
   return this._cwToPx(this._worldXToDisplayX(xCw));
+};
+
+/**
+ * Converts world y (cw) to display y (cw), respecting vertical mirror state.
+ */
+Fretscape.prototype._worldYToDisplayY = function (yCw) {
+  return this._isVerticallyMirrored ? (this.heightCw - yCw) : yCw;
+};
+
+/**
+ * Converts display y (cw) back to world y (cw), respecting vertical mirror state.
+ */
+Fretscape.prototype._displayYToWorldY = function (yCw) {
+  return this._isVerticallyMirrored ? (this.heightCw - yCw) : yCw;
+};
+
+/**
+ * Converts world y coordinate in cw units to pixels.
+ */
+Fretscape.prototype._yCwToPx = function (yCw) {
+  return this._cwToPx(this._worldYToDisplayY(yCw));
 };
 
 /**
@@ -195,9 +225,10 @@ Fretscape.prototype._pxToCw = function (px, py) {
   if (!local) return { x: 0, y: 0 };
   var viewScale = this._viewScale || 1;
   var displayPxX = (local.x - this._viewPanPx.x) / viewScale;
-  var worldPxY = (local.y - this._viewPanPx.y) / viewScale;
+  var displayPxY = (local.y - this._viewPanPx.y) / viewScale;
   var displayCwX = displayPxX / this.cellWidth;
-  return { x: this._displayXToWorldX(displayCwX), y: worldPxY / this.cellWidth };
+  var displayCwY = displayPxY / this.cellWidth;
+  return { x: this._displayXToWorldX(displayCwX), y: this._displayYToWorldY(displayCwY) };
 };
 
 /**
@@ -477,7 +508,7 @@ Fretscape.prototype._drawGrid = function () {
   var m1 = -1;
   var m2 = 1 / 5;
   var toPxX = this._xCwToPx.bind(this);
-  var toPxY = this._cwToPx.bind(this);
+  var toPxY = this._yCwToPx.bind(this);
   var w = this.widthCw;
   var h = this.heightCw;
 
@@ -550,7 +581,8 @@ Fretscape.prototype.render = function () {
   for (var i = 0; i < this.bricks.length; i++) {
     var item = this.bricks[i];
     var stepX = this._isLeftHanded ? -this.cellWidth : this.cellWidth;
-    item.brick.render(this.ctx, this._xCwToPx(item.xCw), this._cwToPx(item.yCw), stepX);
+    var stepY = this._isVerticallyMirrored ? -this.cellWidth : this.cellWidth;
+    item.brick.render(this.ctx, this._xCwToPx(item.xCw), this._yCwToPx(item.yCw), stepX, stepY);
   }
   this.ctx.setTransform(1, 0, 0, 1, 0, 0);
 };

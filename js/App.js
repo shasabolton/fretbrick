@@ -5,9 +5,11 @@
   var canvasWrap = document.getElementById("canvas-wrap");
   var keySelect = document.getElementById("key-select");
   var handednessToggle = document.getElementById("handedness-toggle");
+  var verticalMirrorToggle = document.getElementById("vertical-mirror-toggle");
   var dragConstraintToggle = document.getElementById("drag-constraint-5x1");
   var fretscape = new Fretscape(canvasWrap);
-  var isMirrored = false;
+  var isHorizontallyMirrored = false;
+  var isVerticallyMirrored = false;
   if (keySelect) {
     fretscape.setKey(keySelect.value || "A");
     keySelect.addEventListener("change", function () {
@@ -18,15 +20,24 @@
   }
   if (handednessToggle) {
     var syncHandednessButton = function () {
-      handednessToggle.textContent = isMirrored ? "Right hand" : "Left hand";
-      handednessToggle.setAttribute("aria-pressed", isMirrored ? "true" : "false");
+      handednessToggle.textContent = isHorizontallyMirrored ? "Right hand" : "Left hand";
+      handednessToggle.setAttribute("aria-pressed", isHorizontallyMirrored ? "true" : "false");
     };
     syncHandednessButton();
     handednessToggle.addEventListener("click", function () {
-      isMirrored = !isMirrored;
-      fretscape.setLeftHanded(isMirrored);
+      isHorizontallyMirrored = !isHorizontallyMirrored;
+      fretscape.setLeftHanded(isHorizontallyMirrored);
       syncHandednessButton();
     });
+  }
+  if (verticalMirrorToggle) {
+    fretscape.setVerticalMirrored(!!verticalMirrorToggle.checked);
+    verticalMirrorToggle.addEventListener("change", function () {
+      isVerticallyMirrored = !!verticalMirrorToggle.checked;
+      fretscape.setVerticalMirrored(isVerticallyMirrored);
+    });
+  } else {
+    fretscape.setVerticalMirrored(false);
   }
   if (dragConstraintToggle) {
     fretscape.setDragConstraintSlope(!!dragConstraintToggle.checked);

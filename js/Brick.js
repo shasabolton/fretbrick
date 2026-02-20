@@ -45,14 +45,15 @@ Brick.prototype.setCellWidth = function (w) {
 
 /**
  * Renders the brick to canvas. (x,y) is brick origin in pixels.
- * xStepPx controls horizontal direction/spacing (defaults to +cellWidth).
+ * xStepPx and yStepPx control draw direction/spacing (default +cellWidth).
  */
-Brick.prototype.render = function (ctx, x, y, xStepPx) {
+Brick.prototype.render = function (ctx, x, y, xStepPx, yStepPx) {
   var cols = this.cellData[0] ? this.cellData[0].length : 0;
   var rows = this.cellData.length;
   var midCol = Math.floor(cols / 2);
   var isBlackCol = function (c) { return c === 0 || c === midCol || c === cols - 1; };
   var stepX = (typeof xStepPx === "number") ? xStepPx : this.cellWidth;
+  var stepY = (typeof yStepPx === "number") ? yStepPx : this.cellWidth;
   var radius = this.cellWidth * 0.4;
   var strokeW = this.cellWidth * 0.0125;
   var borderStrokeW = this.cellWidth * 0.025;
@@ -62,10 +63,12 @@ Brick.prototype.render = function (ctx, x, y, xStepPx) {
     var borderOffset = this.cellWidth * 0.5;
     var firstCx = x;
     var lastCx = x + (cols - 1) * stepX;
+    var firstCy = y;
+    var lastCy = y + (rows - 1) * stepY;
     var left = Math.min(firstCx, lastCx) - borderOffset;
-    var top = y - borderOffset;
+    var top = Math.min(firstCy, lastCy) - borderOffset;
     var width = Math.abs(lastCx - firstCx) + borderOffset * 2;
-    var height = (rows - 1) * this.cellWidth + borderOffset * 2;
+    var height = Math.abs(lastCy - firstCy) + borderOffset * 2;
     ctx.beginPath();
     ctx.rect(left, top, width, height);
     ctx.strokeStyle = "#333";
@@ -76,7 +79,7 @@ Brick.prototype.render = function (ctx, x, y, xStepPx) {
   for (var r = 0; r < rows; r++) {
     for (var c = 0; c < this.cellData[r].length; c++) {
       var cx = x + c * stepX;
-      var cy = y + r * this.cellWidth;
+      var cy = y + r * stepY;
       var val = this.cellData[r][c];
       var fillColor = val === "1" ? "#c00" : (isBlackCol(c) ? "#000" : "#f5f5f5");
       var textColor = (val === "1" || isBlackCol(c)) ? "#fff" : "#333";
