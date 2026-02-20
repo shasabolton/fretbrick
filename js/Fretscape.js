@@ -281,8 +281,14 @@ Fretscape.prototype._hitDot = function (xCw, yCw) {
  */
 Fretscape.prototype._dotToDisplayCoord = function (dotX, dotY) {
   var origin = this._getOneCellCenter();
-  var x = origin.x - dotX; /* left is positive */
-  var y = dotY - origin.y; /* down is positive */
+  /* Start from displayed axes so the first brick "1" is always the visible (0,0). */
+  var originDisplayX = this._worldXToDisplayX(origin.x);
+  var originDisplayY = this._worldYToDisplayY(origin.y);
+  var dotDisplayX = this._worldXToDisplayX(dotX);
+  var dotDisplayY = this._worldYToDisplayY(dotY);
+  var x = originDisplayX - dotDisplayX; /* screen-left is positive before handedness flip */
+  var y = dotDisplayY - originDisplayY; /* screen-down is positive before vertical flip */
+  /* Historical naming: _isLeftHanded true is the mirrored/right-handed orientation. */
   if (this._isLeftHanded) {
     x = -x;
   }
