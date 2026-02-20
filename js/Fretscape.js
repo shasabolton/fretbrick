@@ -274,13 +274,19 @@ Fretscape.prototype._hitDot = function (xCw, yCw) {
 };
 
 /**
- * Converts a dot world position into displayed coordinate tuple relative to first brick "1" origin.
- * Origin is (0,0). In left-hand/no-vertical-flip mode, right/up trend negative.
+ * Converts a dot world position into semitone-lattice coordinates from first brick "1".
+ * Musical origin is first brick "1" at (0,0).
+ * +x means one semitone to the left, +y means five semitones downward.
+ * Handedness/vertical mirror are handled via world->display conversion, so axes flip with UI.
  */
 Fretscape.prototype._dotToDisplayCoord = function (dotX, dotY) {
   var origin = this._getOneCellCenter();
-  var x = origin.x - dotX;
-  var y = dotY - origin.y;
+  var originDisplayX = this._worldXToDisplayX(origin.x);
+  var originDisplayY = this._worldYToDisplayY(origin.y);
+  var dotDisplayX = this._worldXToDisplayX(dotX);
+  var dotDisplayY = this._worldYToDisplayY(dotY);
+  var x = originDisplayX - dotDisplayX;
+  var y = dotDisplayY - originDisplayY;
   var snap = function (v) {
     var iv = Math.round(v);
     return Math.abs(v - iv) < 0.000001 ? iv : parseFloat(v.toFixed(3));
@@ -339,16 +345,16 @@ Fretscape.prototype._getAudioContext = function () {
 };
 
 /**
- * Plays a plucked tone from semitone offset (x + 5*y) and wraps to E..D#.
+ * Plays a plucked tone from semitone offset where left=+1 and down=+5 from (0,0).
  */
 Fretscape.prototype._playDotTone = function (dotX, dotY) {
   var coord = this._dotToDisplayCoord(dotX, dotY);
   var semitoneOffset = coord.x + 5 * coord.y;
   var rootFromLowE = this._getKeySemitoneFromLowE();
   var semitoneFromLowE = rootFromLowE + semitoneOffset;
-  var wrappedSemitone = ((semitoneFromLowE % 12) + 12) % 12;
   var lowEFrequencyHz = 82.4068892282175; /* E2, standard guitar low E. */
-  var frequency = lowEFrequencyHz * Math.pow(2, wrappedSemitone / 12);
+  var frequency = lowEFrequencyHz * Math.pow(2, semitoneFromLowE / 12);
+  frequency = Math.max(20, Math.min(20000, frequency));
   var ctx = this._getAudioContext();
   if (!ctx) return;
   if (ctx.state === "suspended" && ctx.resume) {
