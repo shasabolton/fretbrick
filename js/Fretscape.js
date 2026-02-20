@@ -246,6 +246,54 @@ Fretscape.prototype._hitTest = function (xCw, yCw) {
 };
 
 /**
+ * Returns dot hit info at (xCw, yCw), or null if not on a dot.
+ */
+Fretscape.prototype._hitDot = function (xCw, yCw) {
+  var dotRadiusCw = 0.4; /* Keep in sync with Brick.render radius ratio. */
+  var hitRadiusSq = dotRadiusCw * dotRadiusCw;
+  for (var i = this.bricks.length - 1; i >= 0; i--) {
+    var item = this.bricks[i];
+    var data = item.brick && item.brick.cellData ? item.brick.cellData : [];
+    for (var r = 0; r < data.length; r++) {
+      for (var c = 0; c < data[r].length; c++) {
+        var cx = item.xCw + c;
+        var cy = item.yCw + r;
+        var dx = xCw - cx;
+        var dy = yCw - cy;
+        if (dx * dx + dy * dy <= hitRadiusSq) {
+          return { xCw: cx, yCw: cy, brickIndex: i, row: r, col: c };
+        }
+      }
+    }
+  }
+  return null;
+};
+
+/**
+ * Converts a dot world position into displayed coordinate tuple relative to first brick "1" origin.
+ * Origin is (0,0). In left-hand/no-vertical-flip mode, right/up trend negative.
+ */
+Fretscape.prototype._dotToDisplayCoord = function (dotX, dotY) {
+  var origin = this._getOneCellCenter();
+  var x = origin.x - dotX;
+  var y = dotY - origin.y;
+  var snap = function (v) {
+    var iv = Math.round(v);
+    return Math.abs(v - iv) < 0.000001 ? iv : parseFloat(v.toFixed(3));
+  };
+  return { x: snap(x), y: snap(y) };
+};
+
+/**
+ * Alerts a dot coordinate tuple "(x, y)".
+ */
+Fretscape.prototype._alertDotCoordinate = function (dotX, dotY) {
+  if (typeof window === "undefined" || typeof window.alert !== "function") return;
+  var coord = this._dotToDisplayCoord(dotX, dotY);
+  window.alert("(" + coord.x + ", " + coord.y + ")");
+};
+
+/**
  * Gets event coords in viewport pixels. Works for mouse and touch.
  */
 Fretscape.prototype._getEventCoords = function (e) {
@@ -298,6 +346,12 @@ Fretscape.prototype._bindInput = function () {
     if (isTouch && e.touches && e.touches.length !== 1) return;
     var coords = self._getEventCoords(e);
     var cw = self._pxToCw(coords.x, coords.y);
+    var dotHit = self._hitDot(cw.x, cw.y);
+    if (dotHit) {
+      self._alertDotCoordinate(dotHit.xCw, dotHit.yCw);
+      e.preventDefault();
+      return;
+    }
     var idx = self._hitTest(cw.x, cw.y);
     if (idx < 0) return;
     var item = self.bricks[idx];
