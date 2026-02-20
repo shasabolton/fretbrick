@@ -17,7 +17,8 @@ function Fretscape(containerEl) {
   this._dragItem = null;
   this._isCreating = false;
   this._offsetCw = { x: 0, y: 0 };
-  this._dragStartOrigin = null; /* lattice point (x,y) cw where 2,-2 drag line is anchored */
+  this._dragStartOrigin = null; /* lattice point (x,y) cw where active drag line is anchored */
+  this._dragConstraintVector = { x: 2, y: -2 }; /* default 2x2 slope constraint */
   var self = this;
   window.addEventListener("resize", function () { self.render(); });
   this._bindInput();
@@ -29,6 +30,13 @@ function Fretscape(containerEl) {
 Fretscape.prototype.addBrick = function (brick, xCw, yCw) {
   this.bricks.push({ brick: brick, xCw: xCw, yCw: yCw });
   return brick;
+};
+
+/**
+ * Sets drag constraint slope. false => 2x2 slope (2,-2), true => 5x1 slope (5,1).
+ */
+Fretscape.prototype.setDragConstraintSlope = function (useFiveByOneSlope) {
+  this._dragConstraintVector = useFiveByOneSlope ? { x: 5, y: 1 } : { x: 2, y: -2 };
 };
 
 /**
@@ -202,11 +210,12 @@ Fretscape.prototype._snapToLattice = function (originX, originY, originOffset) {
   return best;
 };
 
-/** Snap to intersection when within this many cw of the nearest lattice point (on the 2,-2 line). */
+/** Snap to intersection when within this many cw of nearest lattice point on active drag line. */
 var DRAG_SNAP_RADIUS_CW = 0.5;
 
 /**
- * Updates drag item position. Constrains to the (2,-2) line only. Smooth motion along the line; snaps to intersection when within DRAG_SNAP_RADIUS_CW.
+ * Updates drag item position. Constrains to active slope line through drag start origin.
+ * Smooth motion along the line; snaps to intersection when within DRAG_SNAP_RADIUS_CW.
  */
 Fretscape.prototype._doMove = function (clientX, clientY) {
   if (!this._dragItem || !this._dragStartOrigin) return;
@@ -215,14 +224,16 @@ Fretscape.prototype._doMove = function (clientX, clientY) {
   var desiredY = cw.y - this._offsetCw.y;
   var sx = this._dragStartOrigin.x;
   var sy = this._dragStartOrigin.y;
-  var vx = 2;
-  var vy = -2;
+  var constraint = this._dragConstraintVector || { x: 2, y: -2 };
+  var vx = constraint.x;
+  var vy = constraint.y;
   var vLenSq = vx * vx + vy * vy;
-  /* Project desired onto line: start + t*(2,-2). t in cw. */
+  if (vLenSq === 0) return;
+  /* Project desired onto line: start + t*v, where v is active constraint vector. */
   var t = ((desiredX - sx) * vx + (desiredY - sy) * vy) / vLenSq;
   var ox = sx + t * vx;
   var oy = sy + t * vy;
-  /* Snap to nearest intersection when within 1/2 cellWidth. On this line, lattice points are at start + k*(2,-2); distance to nearest = |t - round(t)| * length(2,-2). */
+  /* Snap to nearest intersection when within 1/2 cw. Lattice points on the line are at start + k*v. */
   var stepLen = Math.sqrt(vLenSq);
   var distToNearest = Math.abs(t - Math.round(t)) * stepLen;
   if (distToNearest <= DRAG_SNAP_RADIUS_CW) {

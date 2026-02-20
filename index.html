@@ -21,6 +21,15 @@
       font-family: sans-serif;
       font-size: 16px;
     }
+    .toolbar-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+    .toolbar-toggle input {
+      margin: 0;
+    }
     .canvas-wrap {
       flex: 1;
       min-height: 0;
@@ -41,7 +50,12 @@
 </head>
 <body>
   <div id="app">
-    <div class="toolbar">toolbar</div>
+    <div class="toolbar">
+      <label class="toolbar-toggle">
+        <input type="checkbox" id="drag-constraint-5x1">
+        <span>Constrain drag to 5x1 slope</span>
+      </label>
+    </div>
     <div class="canvas-wrap" id="canvas-wrap"></div>
   </div>
   <script src="js/Brick.js"></script>
