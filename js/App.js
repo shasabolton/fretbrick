@@ -7,7 +7,7 @@
   var handednessToggle = document.getElementById("handedness-toggle");
   var dragConstraintToggle = document.getElementById("drag-constraint-5x1");
   var fretscape = new Fretscape(canvasWrap);
-  var isLeftHanded = false;
+  var isMirrored = false;
   if (keySelect) {
     fretscape.setKey(keySelect.value || "A");
     keySelect.addEventListener("change", function () {
@@ -18,13 +18,13 @@
   }
   if (handednessToggle) {
     var syncHandednessButton = function () {
-      handednessToggle.textContent = isLeftHanded ? "Left hand" : "Right hand";
-      handednessToggle.setAttribute("aria-pressed", isLeftHanded ? "true" : "false");
+      handednessToggle.textContent = isMirrored ? "Right hand" : "Left hand";
+      handednessToggle.setAttribute("aria-pressed", isMirrored ? "true" : "false");
     };
     syncHandednessButton();
     handednessToggle.addEventListener("click", function () {
-      isLeftHanded = !isLeftHanded;
-      fretscape.setLeftHanded(isLeftHanded);
+      isMirrored = !isMirrored;
+      fretscape.setLeftHanded(isMirrored);
       syncHandednessButton();
     });
   }
