@@ -277,16 +277,18 @@ Fretscape.prototype._hitDot = function (xCw, yCw) {
  * Converts a dot world position into semitone-lattice coordinates from first brick "1".
  * Musical origin is first brick "1" at (0,0).
  * +x means one semitone to the left, +y means five semitones downward.
- * Handedness/vertical mirror are handled via world->display conversion, so axes flip with UI.
+ * Right-handed mode flips x and vertical mirror flips y for note-frequency mapping.
  */
 Fretscape.prototype._dotToDisplayCoord = function (dotX, dotY) {
   var origin = this._getOneCellCenter();
-  var originDisplayX = this._worldXToDisplayX(origin.x);
-  var originDisplayY = this._worldYToDisplayY(origin.y);
-  var dotDisplayX = this._worldXToDisplayX(dotX);
-  var dotDisplayY = this._worldYToDisplayY(dotY);
-  var x = originDisplayX - dotDisplayX;
-  var y = dotDisplayY - originDisplayY;
+  var x = origin.x - dotX; /* left is positive */
+  var y = dotY - origin.y; /* down is positive */
+  if (this._isLeftHanded) {
+    x = -x;
+  }
+  if (this._isVerticallyMirrored) {
+    y = -y;
+  }
   var snap = function (v) {
     var iv = Math.round(v);
     return Math.abs(v - iv) < 0.000001 ? iv : parseFloat(v.toFixed(3));
