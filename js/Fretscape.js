@@ -7,6 +7,8 @@
 function Fretscape(containerEl) {
   this.container = containerEl;
   this.bricks = [];
+  this._musicalKey = "A";
+  this._isLeftHanded = false;
   this.cellWidth = 80;
   this.widthCw = 25;
   this.heightCw = 15;
@@ -48,10 +50,49 @@ Fretscape.prototype.setDragConstraintSlope = function (useFiveByOneSlope) {
 };
 
 /**
+ * Sets the active musical key for this fretscape.
+ */
+Fretscape.prototype.setKey = function (key) {
+  if (typeof key !== "string") return;
+  var normalized = key.trim();
+  if (!normalized) return;
+  this._musicalKey = normalized;
+};
+
+/**
+ * Flips coordinate system horizontally when true (left-hand mode).
+ */
+Fretscape.prototype.setLeftHanded = function (isLeftHanded) {
+  this._isLeftHanded = !!isLeftHanded;
+  this.render();
+};
+
+/**
  * Converts logical coords (cw units) to pixels. All positioning scales by cellWidth.
  */
 Fretscape.prototype._cwToPx = function (cw) {
   return cw * this.cellWidth;
+};
+
+/**
+ * Converts world x (cw) to display x (cw), respecting handedness.
+ */
+Fretscape.prototype._worldXToDisplayX = function (xCw) {
+  return this._isLeftHanded ? (this.widthCw - xCw) : xCw;
+};
+
+/**
+ * Converts display x (cw) back to world x (cw), respecting handedness.
+ */
+Fretscape.prototype._displayXToWorldX = function (xCw) {
+  return this._isLeftHanded ? (this.widthCw - xCw) : xCw;
+};
+
+/**
+ * Converts world x coordinate in cw units to pixels.
+ */
+Fretscape.prototype._xCwToPx = function (xCw) {
+  return this._cwToPx(this._worldXToDisplayX(xCw));
 };
 
 /**
@@ -153,9 +194,10 @@ Fretscape.prototype._pxToCw = function (px, py) {
   var local = this._clientToCanvasPx(px, py);
   if (!local) return { x: 0, y: 0 };
   var viewScale = this._viewScale || 1;
-  var worldPxX = (local.x - this._viewPanPx.x) / viewScale;
+  var displayPxX = (local.x - this._viewPanPx.x) / viewScale;
   var worldPxY = (local.y - this._viewPanPx.y) / viewScale;
-  return { x: worldPxX / this.cellWidth, y: worldPxY / this.cellWidth };
+  var displayCwX = displayPxX / this.cellWidth;
+  return { x: this._displayXToWorldX(displayCwX), y: worldPxY / this.cellWidth };
 };
 
 /**
@@ -434,7 +476,8 @@ Fretscape.prototype._drawGrid = function () {
   var o = this._getOneCellCenter();
   var m1 = -1;
   var m2 = 1 / 5;
-  var toPx = this._cwToPx.bind(this);
+  var toPxX = this._xCwToPx.bind(this);
+  var toPxY = this._cwToPx.bind(this);
   var w = this.widthCw;
   var h = this.heightCw;
 
@@ -466,8 +509,8 @@ Fretscape.prototype._drawGrid = function () {
     }
     if (!p0 || !p1) return;
     this.ctx.beginPath();
-    this.ctx.moveTo(toPx(p0.x), toPx(p0.y));
-    this.ctx.lineTo(toPx(p1.x), toPx(p1.y));
+    this.ctx.moveTo(toPxX(p0.x), toPxY(p0.y));
+    this.ctx.lineTo(toPxX(p1.x), toPxY(p1.y));
     this.ctx.stroke();
   }.bind(this);
 
@@ -506,7 +549,8 @@ Fretscape.prototype.render = function () {
   this._drawGrid();
   for (var i = 0; i < this.bricks.length; i++) {
     var item = this.bricks[i];
-    item.brick.render(this.ctx, this._cwToPx(item.xCw), this._cwToPx(item.yCw));
+    var stepX = this._isLeftHanded ? -this.cellWidth : this.cellWidth;
+    item.brick.render(this.ctx, this._xCwToPx(item.xCw), this._cwToPx(item.yCw), stepX);
   }
   this.ctx.setTransform(1, 0, 0, 1, 0, 0);
 };

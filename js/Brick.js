@@ -44,13 +44,15 @@ Brick.prototype.setCellWidth = function (w) {
 };
 
 /**
- * Renders the brick to canvas. (x,y) is brick origin in pixels. Circle at (c,r) drawn at (x + c*cw, y + r*cw).
+ * Renders the brick to canvas. (x,y) is brick origin in pixels.
+ * xStepPx controls horizontal direction/spacing (defaults to +cellWidth).
  */
-Brick.prototype.render = function (ctx, x, y) {
+Brick.prototype.render = function (ctx, x, y, xStepPx) {
   var cols = this.cellData[0] ? this.cellData[0].length : 0;
   var rows = this.cellData.length;
   var midCol = Math.floor(cols / 2);
   var isBlackCol = function (c) { return c === 0 || c === midCol || c === cols - 1; };
+  var stepX = (typeof xStepPx === "number") ? xStepPx : this.cellWidth;
   var radius = this.cellWidth * 0.4;
   var strokeW = this.cellWidth * 0.0125;
   var borderStrokeW = this.cellWidth * 0.025;
@@ -58,9 +60,11 @@ Brick.prototype.render = function (ctx, x, y) {
 
   if (cols > 0 && rows > 0) {
     var borderOffset = this.cellWidth * 0.5;
-    var left = x - borderOffset;
+    var firstCx = x;
+    var lastCx = x + (cols - 1) * stepX;
+    var left = Math.min(firstCx, lastCx) - borderOffset;
     var top = y - borderOffset;
-    var width = (cols - 1) * this.cellWidth + borderOffset * 2;
+    var width = Math.abs(lastCx - firstCx) + borderOffset * 2;
     var height = (rows - 1) * this.cellWidth + borderOffset * 2;
     ctx.beginPath();
     ctx.rect(left, top, width, height);
@@ -71,7 +75,7 @@ Brick.prototype.render = function (ctx, x, y) {
 
   for (var r = 0; r < rows; r++) {
     for (var c = 0; c < this.cellData[r].length; c++) {
-      var cx = x + c * this.cellWidth;
+      var cx = x + c * stepX;
       var cy = y + r * this.cellWidth;
       var val = this.cellData[r][c];
       var fillColor = val === "1" ? "#c00" : (isBlackCol(c) ? "#000" : "#f5f5f5");
