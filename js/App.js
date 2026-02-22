@@ -4,12 +4,73 @@
 (function () {
   var canvasWrap = document.getElementById("canvas-wrap");
   var keySelect = document.getElementById("key-select");
+  var progressionSelect = document.getElementById("progression-select");
   var handednessToggle = document.getElementById("handedness-toggle");
   var verticalMirrorToggle = document.getElementById("vertical-mirror-toggle");
   var dragConstraintToggle = document.getElementById("drag-constraint-5x1");
   var fretscape = new Fretscape(canvasWrap);
+  var chordProgressions = [];
   var isHorizontallyMirrored = false;
   var isVerticallyMirrored = false;
+  /**
+   * Updates the progression dropdown with loaded data.
+   */
+  var populateProgressionSelect = function (progressions) {
+    if (!progressionSelect) return;
+    while (progressionSelect.firstChild) {
+      progressionSelect.removeChild(progressionSelect.firstChild);
+    }
+    var defaultOption = document.createElement("option");
+    defaultOption.value = "";
+    defaultOption.textContent = "Single brick (default)";
+    progressionSelect.appendChild(defaultOption);
+    for (var i = 0; i < progressions.length; i++) {
+      var progression = progressions[i];
+      if (!progression || typeof progression.id !== "string" || typeof progression.name !== "string") continue;
+      var option = document.createElement("option");
+      option.value = progression.id;
+      option.textContent = progression.name;
+      progressionSelect.appendChild(option);
+    }
+  };
+  /**
+   * Returns a progression object by id from loaded progression data.
+   */
+  var getProgressionById = function (id) {
+    for (var i = 0; i < chordProgressions.length; i++) {
+      if (chordProgressions[i].id === id) return chordProgressions[i];
+    }
+    return null;
+  };
+  /**
+   * Applies currently selected progression; empty selection resets to single brick.
+   */
+  var applySelectedProgression = function () {
+    if (!progressionSelect) {
+      fretscape.applyChordProgression(null);
+      return;
+    }
+    fretscape.applyChordProgression(getProgressionById(progressionSelect.value));
+  };
+  /**
+   * Loads chord progression JSON from static data folder.
+   */
+  var loadChordProgressions = function () {
+    if (typeof fetch !== "function") return Promise.resolve([]);
+    return fetch(encodeURI("data/chord progressions.JSON"))
+      .then(function (response) {
+        if (!response.ok) throw new Error("Failed to load progression data");
+        return response.json();
+      })
+      .then(function (payload) {
+        if (!payload || !payload.progressions || !payload.progressions.length) return [];
+        return payload.progressions;
+      })
+      .catch(function (error) {
+        console.warn("Chord progression data unavailable.", error);
+        return [];
+      });
+  };
   if (keySelect) {
     fretscape.setKey(keySelect.value || "C");
     keySelect.addEventListener("change", function () {
@@ -45,7 +106,13 @@
       fretscape.setDragConstraintSlope(!!dragConstraintToggle.checked);
     });
   }
-  var brick = new Brick();
-  fretscape.addBrick(brick, 10, 6);
-  fretscape.render();
+  fretscape.applyChordProgression(null);
+  if (progressionSelect) {
+    progressionSelect.addEventListener("change", applySelectedProgression);
+    loadChordProgressions().then(function (progressions) {
+      chordProgressions = progressions;
+      populateProgressionSelect(chordProgressions);
+      applySelectedProgression();
+    });
+  }
 })();
