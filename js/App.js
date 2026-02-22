@@ -5,6 +5,7 @@
   var canvasWrap = document.getElementById("canvas-wrap");
   var keySelect = document.getElementById("key-select");
   var progressionSelect = document.getElementById("progression-select");
+  var playbackModeSelect = document.getElementById("playback-mode-select");
   var progressionPlayToggle = document.getElementById("progression-play-toggle");
   var handednessToggle = document.getElementById("handedness-toggle");
   var verticalMirrorToggle = document.getElementById("vertical-mirror-toggle");
@@ -120,6 +121,15 @@
     dragConstraintToggle.addEventListener("change", function () {
       fretscape.setDragConstraintSlope(!!dragConstraintToggle.checked);
     });
+  }
+  if (playbackModeSelect) {
+    fretscape.setProgressionPlaybackMode(playbackModeSelect.value || "root");
+    playbackModeSelect.addEventListener("change", function () {
+      fretscape.setProgressionPlaybackMode(playbackModeSelect.value || "root");
+      syncProgressionPlayButton();
+    });
+  } else {
+    fretscape.setProgressionPlaybackMode("root");
   }
   fretscape.applyChordProgression(null);
   fretscape.onProgressionPlaybackStateChange = syncProgressionPlayButton;

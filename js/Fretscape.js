@@ -36,13 +36,17 @@ function Fretscape(containerEl) {
   this._audioCtxUnavailable = false;
   this._guitarWave = null;
   this._activeProgressionDegrees = null;
+  this._progressionPlaybackMode = "root";
   this._isProgressionPlaying = false;
   this._progressionBeatTimer = null;
   this._progressionAnimationFrame = null;
   this._progressionBeatIndex = 0;
   this._progressionPulseStartMs = 0;
-  this._progressionPulseCell = null;
+  this._progressionPulseFromCell = null;
+  this._progressionPulseToCell = null;
   this._progressionPulseProgress = 0;
+  this._progressionGuidePairFrom = null;
+  this._progressionGuidePairTo = null;
   this._progressionBpm = 100;
   this._progressionBeatsPerChord = 4;
   this.onProgressionPlaybackStateChange = null;
@@ -177,6 +181,73 @@ Fretscape.prototype._getActiveProgressionRootCells = function () {
 };
 
 /**
+ * Returns the cell one row above in the first brick, or null when out of bounds.
+ */
+Fretscape.prototype._getCellAboveInFirstBrick = function (cell) {
+  if (!cell || !this.bricks.length) return null;
+  var firstBrick = this.bricks[0];
+  if (!firstBrick) return null;
+  var minY = firstBrick.yCw;
+  var maxY = firstBrick.yCw + this.brickHeightCw - 1;
+  var targetY = cell.yCw - 1;
+  if (targetY < minY || targetY > maxY) return null;
+  return { xCw: cell.xCw, yCw: targetY };
+};
+
+/**
+ * Returns root/fifth cells for a chord index in the active progression.
+ */
+Fretscape.prototype._getChordPairForRootIndex = function (rootCells, rootIndex) {
+  if (!rootCells || !rootCells.length) return null;
+  var normalized = ((rootIndex % rootCells.length) + rootCells.length) % rootCells.length;
+  var root = rootCells[normalized];
+  var fifth = this._getCellAboveInFirstBrick(root);
+  return { root: root, fifth: fifth || root };
+};
+
+/**
+ * Returns playback note plan for one beat (note cell + root/fifth pair context).
+ */
+Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootCells) {
+  if (!rootCells || !rootCells.length) return null;
+  var chordIndex = Math.floor(beatIndex / this._progressionBeatsPerChord) % rootCells.length;
+  var beatInChord = beatIndex % this._progressionBeatsPerChord;
+  var pair = this._getChordPairForRootIndex(rootCells, chordIndex);
+  if (!pair) return null;
+  var useFifth = this._progressionPlaybackMode === "root5th" && beatInChord >= 2;
+  return {
+    noteCell: useFifth ? pair.fifth : pair.root,
+    pair: pair
+  };
+};
+
+/**
+ * Returns interpolated cell coordinate between two cells for normalized t in [0,1].
+ */
+Fretscape.prototype._interpolateCell = function (startCell, endCell, t) {
+  if (!startCell || !endCell) return null;
+  var clamped = Math.max(0, Math.min(1, t));
+  return {
+    xCw: startCell.xCw + (endCell.xCw - startCell.xCw) * clamped,
+    yCw: startCell.yCw + (endCell.yCw - startCell.yCw) * clamped
+  };
+};
+
+/**
+ * Sets bass playback mode. "root5th" uses root for 2 beats then 5th for 2 beats.
+ */
+Fretscape.prototype.setProgressionPlaybackMode = function (mode) {
+  var normalized = mode === "root5th" ? "root5th" : "root";
+  if (this._progressionPlaybackMode === normalized) return;
+  this._progressionPlaybackMode = normalized;
+  if (this._isProgressionPlaying) {
+    this.stopProgressionPlayback();
+    return;
+  }
+  this.render();
+};
+
+/**
  * Returns true when a selected progression maps to at least one root point.
  */
 Fretscape.prototype.hasProgressionPath = function () {
@@ -228,20 +299,45 @@ Fretscape.prototype._drawProgressionRootGuide = function () {
 };
 
 /**
- * Draws the active beat pulse as a green ring that grows from 1% to 100% note radius.
+ * Draws a yellow root-to-5th line that follows the moving playback position.
+ */
+Fretscape.prototype._drawProgressionRootToFifthGuide = function () {
+  if (this._progressionPlaybackMode !== "root5th") return;
+  if (!this._progressionGuidePairFrom || !this._progressionGuidePairTo) return;
+  var t = Math.max(0, Math.min(1, this._progressionPulseProgress || 0));
+  var rootNow = this._interpolateCell(this._progressionGuidePairFrom.root, this._progressionGuidePairTo.root, t);
+  var fifthNow = this._interpolateCell(this._progressionGuidePairFrom.fifth, this._progressionGuidePairTo.fifth, t);
+  if (!rootNow || !fifthNow) return;
+  this.ctx.save();
+  this.ctx.beginPath();
+  this.ctx.moveTo(this._xCwToPx(rootNow.xCw), this._yCwToPx(rootNow.yCw));
+  this.ctx.lineTo(this._xCwToPx(fifthNow.xCw), this._yCwToPx(fifthNow.yCw));
+  this.ctx.strokeStyle = "#f1c40f";
+  this.ctx.lineWidth = Math.max(1, this.cellWidth * 0.015);
+  this.ctx.lineCap = "round";
+  this.ctx.stroke();
+  this.ctx.restore();
+};
+
+/**
+ * Draws the moving green playback dot with pulsing radius.
  */
 Fretscape.prototype._drawProgressionPulseIndicator = function () {
-  if (!this._progressionPulseCell) return;
-  var centerX = this._xCwToPx(this._progressionPulseCell.xCw);
-  var centerY = this._yCwToPx(this._progressionPulseCell.yCw);
-  var noteRadius = this.cellWidth * 0.4;
+  if (!this._progressionPulseFromCell || !this._progressionPulseToCell) return;
   var pulseT = Math.max(0.01, Math.min(1, this._progressionPulseProgress || 0.01));
+  var pulseCell = this._interpolateCell(this._progressionPulseFromCell, this._progressionPulseToCell, pulseT);
+  if (!pulseCell) return;
+  var centerX = this._xCwToPx(pulseCell.xCw);
+  var centerY = this._yCwToPx(pulseCell.yCw);
+  var noteRadius = this.cellWidth * 0.4;
   var pulseRadius = noteRadius * pulseT;
   this.ctx.save();
   this.ctx.beginPath();
   this.ctx.arc(centerX, centerY, pulseRadius, 0, Math.PI * 2);
-  this.ctx.strokeStyle = "#2ea043";
-  this.ctx.lineWidth = Math.max(1, this.cellWidth * 0.02);
+  this.ctx.fillStyle = "#2ea043";
+  this.ctx.fill();
+  this.ctx.strokeStyle = "#1f7a34";
+  this.ctx.lineWidth = Math.max(1, this.cellWidth * 0.01);
   this.ctx.stroke();
   this.ctx.restore();
 };
@@ -253,7 +349,7 @@ Fretscape.prototype._startProgressionPulseLoop = function () {
   if (this._progressionAnimationFrame !== null) return;
   var self = this;
   var tick = function () {
-    if (!self._isProgressionPlaying || !self._progressionPulseCell) {
+    if (!self._isProgressionPlaying || !self._progressionPulseFromCell || !self._progressionPulseToCell) {
       self._progressionAnimationFrame = null;
       self.render();
       return;
@@ -285,10 +381,25 @@ Fretscape.prototype._playProgressionBeat = function () {
     this.stopProgressionPlayback();
     return;
   }
-  var chordIndex = Math.floor(this._progressionBeatIndex / this._progressionBeatsPerChord) % rootCells.length;
-  var rootCell = rootCells[chordIndex];
-  this._playDotTone(rootCell.xCw, rootCell.yCw);
-  this._progressionPulseCell = { xCw: rootCell.xCw, yCw: rootCell.yCw };
+  var currentPlan = this._getProgressionBeatPlan(this._progressionBeatIndex, rootCells);
+  var nextPlan = this._getProgressionBeatPlan(this._progressionBeatIndex + 1, rootCells);
+  if (!currentPlan || !currentPlan.noteCell || !currentPlan.pair) {
+    this.stopProgressionPlayback();
+    return;
+  }
+  var nextNoteCell = nextPlan && nextPlan.noteCell ? nextPlan.noteCell : currentPlan.noteCell;
+  var nextPair = nextPlan && nextPlan.pair ? nextPlan.pair : currentPlan.pair;
+  this._playDotTone(currentPlan.noteCell.xCw, currentPlan.noteCell.yCw);
+  this._progressionPulseFromCell = { xCw: currentPlan.noteCell.xCw, yCw: currentPlan.noteCell.yCw };
+  this._progressionPulseToCell = { xCw: nextNoteCell.xCw, yCw: nextNoteCell.yCw };
+  this._progressionGuidePairFrom = {
+    root: { xCw: currentPlan.pair.root.xCw, yCw: currentPlan.pair.root.yCw },
+    fifth: { xCw: currentPlan.pair.fifth.xCw, yCw: currentPlan.pair.fifth.yCw }
+  };
+  this._progressionGuidePairTo = {
+    root: { xCw: nextPair.root.xCw, yCw: nextPair.root.yCw },
+    fifth: { xCw: nextPair.fifth.xCw, yCw: nextPair.fifth.yCw }
+  };
   this._progressionPulseProgress = 0.01;
   this._progressionPulseStartMs = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
   this._progressionBeatIndex++;
@@ -324,7 +435,10 @@ Fretscape.prototype.stopProgressionPlayback = function () {
   }
   this._isProgressionPlaying = false;
   this._progressionBeatIndex = 0;
-  this._progressionPulseCell = null;
+  this._progressionPulseFromCell = null;
+  this._progressionPulseToCell = null;
+  this._progressionGuidePairFrom = null;
+  this._progressionGuidePairTo = null;
   this._progressionPulseProgress = 0;
   this._stopProgressionPulseLoop();
   if (wasPlaying) {
@@ -347,6 +461,13 @@ Fretscape.prototype.applyChordProgression = function (progression) {
   if (!this.bricks.length) {
     var topLeft = this._getDefaultBrickTopLeft();
     this.addBrick(new Brick(), topLeft.x, topLeft.y);
+  }
+  if (!this._isProgressionPlaying) {
+    this._progressionPulseFromCell = null;
+    this._progressionPulseToCell = null;
+    this._progressionGuidePairFrom = null;
+    this._progressionGuidePairTo = null;
+    this._progressionPulseProgress = 0;
   }
   this.render();
 };
@@ -1113,6 +1234,7 @@ Fretscape.prototype.render = function () {
     item.brick.render(this.ctx, this._xCwToPx(item.xCw), this._yCwToPx(item.yCw), stepX, stepY);
   }
   this._drawProgressionRootGuide();
+  this._drawProgressionRootToFifthGuide();
   this._drawProgressionPulseIndicator();
   this.ctx.setTransform(1, 0, 0, 1, 0, 0);
 };
