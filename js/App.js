@@ -22,7 +22,7 @@
     }
     var defaultOption = document.createElement("option");
     defaultOption.value = "";
-    defaultOption.textContent = "Single brick (default)";
+    defaultOption.textContent = "Single brick location map";
     progressionSelect.appendChild(defaultOption);
     for (var i = 0; i < progressions.length; i++) {
       var progression = progressions[i];
@@ -112,6 +112,9 @@
     loadChordProgressions().then(function (progressions) {
       chordProgressions = progressions;
       populateProgressionSelect(chordProgressions);
+      if (chordProgressions.length) {
+        progressionSelect.value = chordProgressions[0].id;
+      }
       applySelectedProgression();
     });
   }

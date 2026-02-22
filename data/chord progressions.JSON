@@ -1,9 +1,14 @@
 {
   "progressions": [
     {
-      "id": "axis-pop-cadence",
-      "name": "Axis Pop Cadence (I-V-vi-IV)",
-      "degrees": ["I", "V", "vi", "IV"]
+      "id": "tonic-drone",
+      "name": "Tonic Drone (I)",
+      "degrees": ["I"]
+    },
+    {
+      "id": "classic-three-chord-cadence",
+      "name": "Classic Three-Chord Cadence (I-IV-V)",
+      "degrees": ["I", "IV", "V"]
     },
     {
       "id": "sensitive-female-progression",
@@ -16,14 +21,9 @@
       "degrees": ["I", "vi", "IV", "V"]
     },
     {
-      "id": "jazz-turnaround",
-      "name": "Jazz Turnaround (ii-V-I)",
-      "degrees": ["ii", "V", "I"]
-    },
-    {
-      "id": "classic-three-chord-cadence",
-      "name": "Classic Three-Chord Cadence (I-IV-V)",
-      "degrees": ["I", "IV", "V"]
+      "id": "axis-pop-cadence",
+      "name": "Axis Pop Cadence (I-V-vi-IV)",
+      "degrees": ["I", "V", "vi", "IV"]
     },
     {
       "id": "rhythm-changes-turnaround",
