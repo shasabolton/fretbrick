@@ -5,6 +5,7 @@
   var canvasWrap = document.getElementById("canvas-wrap");
   var keySelect = document.getElementById("key-select");
   var progressionSelect = document.getElementById("progression-select");
+  var progressionPlayToggle = document.getElementById("progression-play-toggle");
   var handednessToggle = document.getElementById("handedness-toggle");
   var verticalMirrorToggle = document.getElementById("vertical-mirror-toggle");
   var dragConstraintToggle = document.getElementById("drag-constraint-5x1");
@@ -46,11 +47,25 @@
    * Applies currently selected progression; empty selection resets to single brick.
    */
   var applySelectedProgression = function () {
+    fretscape.stopProgressionPlayback();
     if (!progressionSelect) {
       fretscape.applyChordProgression(null);
+      syncProgressionPlayButton();
       return;
     }
     fretscape.applyChordProgression(getProgressionById(progressionSelect.value));
+    syncProgressionPlayButton();
+  };
+  /**
+   * Keeps the progression play button label/state in sync with playback and selection.
+   */
+  var syncProgressionPlayButton = function () {
+    if (!progressionPlayToggle) return;
+    var isPlaying = fretscape.isProgressionPlaybackActive();
+    var hasPath = fretscape.hasProgressionPath();
+    progressionPlayToggle.textContent = isPlaying ? "Stop" : "Play";
+    progressionPlayToggle.setAttribute("aria-pressed", isPlaying ? "true" : "false");
+    progressionPlayToggle.disabled = !hasPath;
   };
   /**
    * Loads chord progression JSON from static data folder.
@@ -107,6 +122,17 @@
     });
   }
   fretscape.applyChordProgression(null);
+  fretscape.onProgressionPlaybackStateChange = syncProgressionPlayButton;
+  if (progressionPlayToggle) {
+    progressionPlayToggle.addEventListener("click", function () {
+      if (fretscape.isProgressionPlaybackActive()) {
+        fretscape.stopProgressionPlayback();
+      } else {
+        fretscape.startProgressionPlayback();
+      }
+      syncProgressionPlayButton();
+    });
+  }
   if (progressionSelect) {
     progressionSelect.addEventListener("change", applySelectedProgression);
     loadChordProgressions().then(function (progressions) {
@@ -118,4 +144,5 @@
       applySelectedProgression();
     });
   }
+  syncProgressionPlayButton();
 })();
