@@ -15,6 +15,7 @@ function Fretscape(containerEl) {
   this.heightCw = 15;
   this.brickWidthCw = 5;
   this.brickHeightCw = 3;
+  this._defaultOneCellCenterCw = { x: 14, y: 7 };
   this.canvas = document.createElement("canvas");
   this.ctx = this.canvas.getContext("2d");
   this.container.appendChild(this.canvas);
@@ -48,6 +49,13 @@ Fretscape.prototype.addBrick = function (brick, xCw, yCw) {
 };
 
 /**
+ * Clears all bricks from the fretscape.
+ */
+Fretscape.prototype.clearBricks = function () {
+  this.bricks = [];
+};
+
+/**
  * Sets drag constraint slope. false => 2x2 slope (2,-2), true => 5x1 slope (5,1).
  */
 Fretscape.prototype.setDragConstraintSlope = function (useFiveByOneSlope) {
@@ -62,6 +70,105 @@ Fretscape.prototype.setKey = function (key) {
   var normalized = key.trim();
   if (!normalized) return;
   this._musicalKey = normalized;
+};
+
+/**
+ * Converts a scale-degree token (for example "vi" or "bVII") into semitone offset from I.
+ */
+Fretscape.prototype._degreeToSemitoneOffset = function (degreeToken) {
+  if (typeof degreeToken !== "string") return null;
+  var token = degreeToken.trim();
+  if (!token) return null;
+  var accidental = 0;
+  while (token.charAt(0) === "#" || token.charAt(0) === "b") {
+    accidental += token.charAt(0) === "#" ? 1 : -1;
+    token = token.slice(1);
+  }
+  var degree = token.toUpperCase();
+  var degreeToSemitone = {
+    "I": 0,
+    "II": 2,
+    "III": 4,
+    "IV": 5,
+    "V": 7,
+    "VI": 9,
+    "VII": 11
+  };
+  if (!degreeToSemitone.hasOwnProperty(degree)) return null;
+  var semitone = degreeToSemitone[degree] + accidental;
+  return ((semitone % 12) + 12) % 12;
+};
+
+/**
+ * Chooses a compact lattice offset for a semitone offset where x + 5y = semitones.
+ */
+Fretscape.prototype._semitoneToLatticeOffset = function (semitoneOffset) {
+  var best = { x: semitoneOffset, y: 0 };
+  var bestScore = Number.POSITIVE_INFINITY;
+  for (var y = -3; y <= 3; y++) {
+    var x = semitoneOffset - 5 * y;
+    var score = Math.abs(x) + Math.abs(y) * 2;
+    if (score < bestScore) {
+      bestScore = score;
+      best = { x: x, y: y };
+    }
+  }
+  return best;
+};
+
+/**
+ * Returns top-left coords for a default single brick centered at configured origin.
+ */
+Fretscape.prototype._getDefaultBrickTopLeft = function () {
+  var brick = new Brick();
+  var originOffset = this._getBrickOriginOffset(brick);
+  return {
+    x: this._defaultOneCellCenterCw.x - originOffset.col,
+    y: this._defaultOneCellCenterCw.y - originOffset.row
+  };
+};
+
+/**
+ * Builds top-left brick coordinates for the provided progression definition.
+ */
+Fretscape.prototype._buildProgressionLayout = function (progression) {
+  var degrees = progression && progression.degrees ? progression.degrees : null;
+  var baseOrigin = this._getOneCellCenter();
+  var layout = [];
+  if (!degrees || !degrees.length) {
+    layout.push(this._getDefaultBrickTopLeft());
+    return layout;
+  }
+  for (var i = 0; i < degrees.length; i++) {
+    var semitone = this._degreeToSemitoneOffset(degrees[i]);
+    if (semitone === null) continue;
+    var latticeOffset = this._semitoneToLatticeOffset(semitone);
+    var brick = new Brick();
+    var originOffset = this._getBrickOriginOffset(brick);
+    var targetOriginX = baseOrigin.x - latticeOffset.x;
+    var targetOriginY = baseOrigin.y + latticeOffset.y;
+    var snappedOrigin = this._snapToLattice(targetOriginX, targetOriginY, originOffset);
+    layout.push({
+      x: snappedOrigin.x - originOffset.col,
+      y: snappedOrigin.y - originOffset.row
+    });
+  }
+  if (!layout.length) {
+    layout.push(this._getDefaultBrickTopLeft());
+  }
+  return layout;
+};
+
+/**
+ * Replaces current bricks with default or progression-based brick layout.
+ */
+Fretscape.prototype.applyChordProgression = function (progression) {
+  var layout = this._buildProgressionLayout(progression);
+  this.clearBricks();
+  for (var i = 0; i < layout.length; i++) {
+    this.addBrick(new Brick(), layout[i].x, layout[i].y);
+  }
+  this.render();
 };
 
 /**
@@ -731,7 +838,9 @@ Fretscape.prototype._getBrickOriginOffset = function (brick) {
  * Returns (xCw, yCw) of the first brick's "1" cell center (grid origin).
  */
 Fretscape.prototype._getOneCellCenter = function () {
-  if (!this.bricks.length) return { x: this.widthCw / 2, y: this.heightCw / 2 };
+  if (!this.bricks.length) {
+    return { x: this._defaultOneCellCenterCw.x, y: this._defaultOneCellCenterCw.y };
+  }
   var item = this.bricks[0];
   var brick = item.brick;
   var off = this._getBrickOriginOffset(brick);

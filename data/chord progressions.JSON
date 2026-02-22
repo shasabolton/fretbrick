@@ -1,0 +1,34 @@
+{
+  "progressions": [
+    {
+      "id": "axis-pop-cadence",
+      "name": "Axis Pop Cadence (I-V-vi-IV)",
+      "degrees": ["I", "V", "vi", "IV"]
+    },
+    {
+      "id": "sensitive-female-progression",
+      "name": "Sensitive Female Progression (vi-IV-I-V)",
+      "degrees": ["vi", "IV", "I", "V"]
+    },
+    {
+      "id": "doo-wop-50s-progression",
+      "name": "50s Doo-Wop Progression (I-vi-IV-V)",
+      "degrees": ["I", "vi", "IV", "V"]
+    },
+    {
+      "id": "jazz-turnaround",
+      "name": "Jazz Turnaround (ii-V-I)",
+      "degrees": ["ii", "V", "I"]
+    },
+    {
+      "id": "classic-three-chord-cadence",
+      "name": "Classic Three-Chord Cadence (I-IV-V)",
+      "degrees": ["I", "IV", "V"]
+    },
+    {
+      "id": "rhythm-changes-turnaround",
+      "name": "Rhythm Changes Turnaround (I-vi-ii-V)",
+      "degrees": ["I", "vi", "ii", "V"]
+    }
+  ]
+}
