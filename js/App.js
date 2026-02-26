@@ -7,6 +7,8 @@
   var progressionSelect = document.getElementById("progression-select");
   var playbackModeSelect = document.getElementById("playback-mode-select");
   var drumPatternSelect = document.getElementById("drum-pattern-select");
+  var bpmSlider = document.getElementById("bpm-slider");
+  var bpmReadout = document.getElementById("bpm-readout");
   var progressionPlayToggle = document.getElementById("progression-play-toggle");
   var handednessToggle = document.getElementById("handedness-toggle");
   var verticalMirrorToggle = document.getElementById("vertical-mirror-toggle");
@@ -70,6 +72,18 @@
     progressionPlayToggle.textContent = isPlaying ? "Stop" : "Play";
     progressionPlayToggle.setAttribute("aria-pressed", isPlaying ? "true" : "false");
     progressionPlayToggle.disabled = !hasPath;
+  };
+  /**
+   * Applies BPM slider value to Fretscape and updates the text readout.
+   */
+  var applyBpmFromSlider = function () {
+    var bpm = bpmSlider ? parseInt(bpmSlider.value, 10) : 100;
+    if (!bpm || bpm < 60) bpm = 60;
+    if (bpm > 200) bpm = 200;
+    fretscape.setProgressionBpm(bpm);
+    if (bpmReadout) {
+      bpmReadout.textContent = bpm + " BPM";
+    }
   };
   /**
    * Updates drum dropdown with patterns loaded from drumbeats JSON.
@@ -182,6 +196,15 @@
     });
   } else {
     fretscape.setProgressionPlaybackMode("root");
+  }
+  if (bpmSlider) {
+    bpmSlider.addEventListener("input", applyBpmFromSlider);
+    applyBpmFromSlider();
+  } else {
+    fretscape.setProgressionBpm(100);
+    if (bpmReadout) {
+      bpmReadout.textContent = "100 BPM";
+    }
   }
   fretscape.applyChordProgression(null);
   fretscape.onProgressionPlaybackStateChange = syncProgressionPlayButton;

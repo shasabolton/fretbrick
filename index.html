@@ -105,6 +105,11 @@
             <option value="">No drums</option>
           </select>
         </label>
+        <label class="toolbar-group" for="bpm-slider">
+          <span>BPM</span>
+          <input type="range" id="bpm-slider" min="60" max="200" step="1" value="100">
+          <span id="bpm-readout">100 BPM</span>
+        </label>
         <button type="button" id="progression-play-toggle" aria-pressed="false">Play</button>
         <button type="button" id="handedness-toggle" aria-pressed="false">Left hand</button>
         <label class="toolbar-toggle">

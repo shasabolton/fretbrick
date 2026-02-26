@@ -363,6 +363,34 @@ Fretscape.prototype._getProgressionBeatMs = function () {
 };
 
 /**
+ * Sets progression playback tempo in BPM (clamped to 60..200).
+ */
+Fretscape.prototype.setProgressionBpm = function (bpm) {
+  var next = parseInt(bpm, 10);
+  if (!next || next < 60) next = 60;
+  if (next > 200) next = 200;
+  this._progressionBpm = next;
+  if (this._isProgressionPlaying) {
+    this._restartProgressionBeatTimer();
+  }
+};
+
+/**
+ * Restarts beat interval using current BPM while preserving beat index.
+ */
+Fretscape.prototype._restartProgressionBeatTimer = function () {
+  if (this._progressionBeatTimer !== null) {
+    window.clearInterval(this._progressionBeatTimer);
+    this._progressionBeatTimer = null;
+  }
+  if (!this._isProgressionPlaying) return;
+  var self = this;
+  this._progressionBeatTimer = window.setInterval(function () {
+    self._playProgressionBeat();
+  }, this._getProgressionBeatMs());
+};
+
+/**
  * Notifies app-level playback subscribers after transport state changes.
  */
 Fretscape.prototype._notifyProgressionPlaybackStateChange = function () {
@@ -519,16 +547,13 @@ Fretscape.prototype._playProgressionBeat = function () {
 Fretscape.prototype.startProgressionPlayback = function () {
   if (this._isProgressionPlaying) return true;
   if (!this.hasProgressionPath()) return false;
-  var self = this;
   this._isProgressionPlaying = true;
   this._progressionBeatIndex = 0;
   if (this._drumEngine && typeof this._drumEngine.reset === "function") {
     this._drumEngine.reset();
   }
   this._playProgressionBeat();
-  this._progressionBeatTimer = window.setInterval(function () {
-    self._playProgressionBeat();
-  }, this._getProgressionBeatMs());
+  this._restartProgressionBeatTimer();
   this._notifyProgressionPlaybackStateChange();
   return true;
 };
