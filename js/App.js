@@ -6,14 +6,17 @@
   var keySelect = document.getElementById("key-select");
   var progressionSelect = document.getElementById("progression-select");
   var playbackModeSelect = document.getElementById("playback-mode-select");
+  var drumPatternSelect = document.getElementById("drum-pattern-select");
   var progressionPlayToggle = document.getElementById("progression-play-toggle");
   var handednessToggle = document.getElementById("handedness-toggle");
   var verticalMirrorToggle = document.getElementById("vertical-mirror-toggle");
   var dragConstraintToggle = document.getElementById("drag-constraint-5x1");
   var fretscape = new Fretscape(canvasWrap);
+  var drumEngine = new DrumEngine();
   var chordProgressions = [];
   var isHorizontallyMirrored = false;
   var isVerticallyMirrored = false;
+  fretscape.setDrumEngine(drumEngine);
   /**
    * Updates the progression dropdown with loaded data.
    */
@@ -69,6 +72,36 @@
     progressionPlayToggle.disabled = !hasPath;
   };
   /**
+   * Updates drum dropdown with patterns loaded from drumbeats JSON.
+   */
+  var populateDrumPatternSelect = function () {
+    if (!drumPatternSelect) return;
+    var patterns = drumEngine.getPatterns();
+    while (drumPatternSelect.firstChild) {
+      drumPatternSelect.removeChild(drumPatternSelect.firstChild);
+    }
+    var noneOption = document.createElement("option");
+    noneOption.value = "";
+    noneOption.textContent = "No drums";
+    drumPatternSelect.appendChild(noneOption);
+    for (var i = 0; i < patterns.length; i++) {
+      var option = document.createElement("option");
+      option.value = patterns[i].id;
+      option.textContent = patterns[i].name;
+      drumPatternSelect.appendChild(option);
+    }
+  };
+  /**
+   * Applies selected drum pattern to DrumEngine.
+   */
+  var applySelectedDrumPattern = function () {
+    if (!drumPatternSelect) {
+      drumEngine.setSelectedPattern("");
+      return;
+    }
+    drumEngine.setSelectedPattern(drumPatternSelect.value || "");
+  };
+  /**
    * Loads chord progression JSON from static data folder.
    */
   var loadChordProgressions = function () {
@@ -85,6 +118,25 @@
       .catch(function (error) {
         console.warn("Chord progression data unavailable.", error);
         return [];
+      });
+  };
+  /**
+   * Loads drumbeat dataset from data folder.
+   */
+  var loadDrumbeats = function () {
+    if (typeof fetch !== "function") return Promise.resolve({ key: {}, patterns: [] });
+    return fetch(encodeURI("data/drumbeats.JSON"))
+      .then(function (response) {
+        if (!response.ok) throw new Error("Failed to load drumbeat data");
+        return response.json();
+      })
+      .then(function (payload) {
+        if (!payload || !payload.drumbeats) return { key: {}, patterns: [] };
+        return payload.drumbeats;
+      })
+      .catch(function (error) {
+        console.warn("Drumbeat data unavailable.", error);
+        return { key: {}, patterns: [] };
       });
   };
   if (keySelect) {
@@ -152,6 +204,16 @@
         progressionSelect.value = chordProgressions[0].id;
       }
       applySelectedProgression();
+    });
+  }
+  if (drumPatternSelect) {
+    drumPatternSelect.addEventListener("change", applySelectedDrumPattern);
+    loadDrumbeats().then(function (drumbeats) {
+      drumEngine.setDrumbeats(drumbeats);
+      populateDrumPatternSelect();
+      var patterns = drumEngine.getPatterns();
+      drumPatternSelect.value = patterns.length ? patterns[0].id : "";
+      applySelectedDrumPattern();
     });
   }
   syncProgressionPlayButton();

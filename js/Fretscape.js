@@ -49,6 +49,7 @@ function Fretscape(containerEl) {
   this._progressionGuidePairTo = null;
   this._progressionBpm = 100;
   this._progressionBeatsPerChord = 4;
+  this._drumEngine = null;
   this.onProgressionPlaybackStateChange = null;
   var self = this;
   window.addEventListener("resize", function () { self.render(); });
@@ -85,6 +86,21 @@ Fretscape.prototype.setKey = function (key) {
   var normalized = key.trim();
   if (!normalized) return;
   this._musicalKey = normalized;
+};
+
+/**
+ * Sets external drum engine used by progression transport.
+ */
+Fretscape.prototype.setDrumEngine = function (drumEngine) {
+  this._drumEngine = drumEngine || null;
+};
+
+/**
+ * Plays one drum beat when a drum pattern is selected.
+ */
+Fretscape.prototype._playDrumBeat = function (beatIndex) {
+  if (!this._drumEngine || typeof this._drumEngine.playBeat !== "function") return;
+  this._drumEngine.playBeat(beatIndex);
 };
 
 /**
@@ -476,6 +492,7 @@ Fretscape.prototype._playProgressionBeat = function () {
   }
   var nextNoteCell = nextPlan && nextPlan.noteCell ? nextPlan.noteCell : currentPlan.noteCell;
   var nextShape = nextPlan && nextPlan.shape ? nextPlan.shape : currentPlan.shape;
+  this._playDrumBeat(this._progressionBeatIndex % 4);
   this._playDotTone(currentPlan.noteCell.xCw, currentPlan.noteCell.yCw);
   this._progressionPulseFromCell = { xCw: currentPlan.noteCell.xCw, yCw: currentPlan.noteCell.yCw };
   this._progressionPulseToCell = { xCw: nextNoteCell.xCw, yCw: nextNoteCell.yCw };
@@ -505,6 +522,9 @@ Fretscape.prototype.startProgressionPlayback = function () {
   var self = this;
   this._isProgressionPlaying = true;
   this._progressionBeatIndex = 0;
+  if (this._drumEngine && typeof this._drumEngine.reset === "function") {
+    this._drumEngine.reset();
+  }
   this._playProgressionBeat();
   this._progressionBeatTimer = window.setInterval(function () {
     self._playProgressionBeat();
@@ -521,6 +541,9 @@ Fretscape.prototype.stopProgressionPlayback = function () {
   if (this._progressionBeatTimer !== null) {
     window.clearInterval(this._progressionBeatTimer);
     this._progressionBeatTimer = null;
+  }
+  if (this._drumEngine && typeof this._drumEngine.stop === "function") {
+    this._drumEngine.stop();
   }
   this._isProgressionPlaying = false;
   this._progressionBeatIndex = 0;
