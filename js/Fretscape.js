@@ -407,13 +407,17 @@ Fretscape.prototype._drawProgressionRootToFifthGuide = function () {
  */
 Fretscape.prototype._drawProgressionPulseIndicator = function () {
   if (!this._progressionPulseFromCell || !this._progressionPulseToCell) return;
-  var pulseT = Math.max(0.01, Math.min(1, this._progressionPulseProgress || 0.01));
-  var pulseCell = this._interpolateCell(this._progressionPulseFromCell, this._progressionPulseToCell, pulseT);
+  var moveT = Math.max(0, Math.min(1, this._progressionPulseProgress || 0));
+  var pulseCell = this._interpolateCell(this._progressionPulseFromCell, this._progressionPulseToCell, moveT);
   if (!pulseCell) return;
   var centerX = this._xCwToPx(pulseCell.xCw);
   var centerY = this._yCwToPx(pulseCell.yCw);
   var noteRadius = this.cellWidth * 0.4;
-  var pulseRadius = noteRadius * pulseT;
+  /* Peak on the beat, smallest halfway between beats. */
+  var minScale = 0.01;
+  var beatOscillation = 0.5 + 0.5 * Math.cos(moveT * Math.PI * 2);
+  var pulseScale = minScale + (1 - minScale) * beatOscillation;
+  var pulseRadius = noteRadius * pulseScale;
   this.ctx.save();
   this.ctx.beginPath();
   this.ctx.arc(centerX, centerY, pulseRadius, 0, Math.PI * 2);
@@ -426,7 +430,7 @@ Fretscape.prototype._drawProgressionPulseIndicator = function () {
 };
 
 /**
- * Starts pulse animation frames so the active beat ring grows across the beat.
+ * Starts pulse animation frames for beat-synced motion and pulsing.
  */
 Fretscape.prototype._startProgressionPulseLoop = function () {
   if (this._progressionAnimationFrame !== null) return;
@@ -439,7 +443,7 @@ Fretscape.prototype._startProgressionPulseLoop = function () {
     }
     var now = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
     var beatMs = self._getProgressionBeatMs();
-    self._progressionPulseProgress = Math.max(0.01, Math.min(1, (now - self._progressionPulseStartMs) / beatMs));
+    self._progressionPulseProgress = Math.max(0, Math.min(1, (now - self._progressionPulseStartMs) / beatMs));
     self.render();
     self._progressionAnimationFrame = window.requestAnimationFrame(tick);
   };
@@ -485,7 +489,7 @@ Fretscape.prototype._playProgressionBeat = function () {
     third: { xCw: nextShape.third.xCw, yCw: nextShape.third.yCw },
     fifth: { xCw: nextShape.fifth.xCw, yCw: nextShape.fifth.yCw }
   };
-  this._progressionPulseProgress = 0.01;
+  this._progressionPulseProgress = 0;
   this._progressionPulseStartMs = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
   this._progressionBeatIndex++;
   this._startProgressionPulseLoop();
