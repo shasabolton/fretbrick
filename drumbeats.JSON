@@ -1,0 +1,21 @@
+{
+  "key":{
+    "k":"kick",
+    "h":"hat",
+    "s":"snare",
+    "d":"ding",
+    "c":"click"
+  },
+  "patterns": [
+      {
+        "id": "boom-kah",
+        "name": "boom-kah",
+        "beats": ["k,h","h","s h","h"]
+      },
+      {
+        "id": "metronome",
+        "name": "metronome",
+        "beats": ["d", "c", "c", "c"]
+      }
+      ]
+}
