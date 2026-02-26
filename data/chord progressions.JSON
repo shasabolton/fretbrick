@@ -7,8 +7,8 @@
     },
     {
       "id": "classic-three-chord-cadence",
-      "name": "Classic Three-Chord Cadence (I-IV-V)",
-      "degrees": ["I", "IV", "V"]
+      "name": "Classic Three-Chord Cadence (I-IV-V-I)",
+      "degrees": ["I", "IV", "V","I"]
     },
     {
       "id": "sensitive-female-progression",
