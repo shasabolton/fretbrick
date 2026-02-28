@@ -7,6 +7,7 @@
   var progressionSelect = document.getElementById("progression-select");
   var playbackModeSelect = document.getElementById("playback-mode-select");
   var drumPatternSelect = document.getElementById("drum-pattern-select");
+  var riffSelect = document.getElementById("riff-select");
   var bpmSlider = document.getElementById("bpm-slider");
   var bpmReadout = document.getElementById("bpm-readout");
   var progressionPlayToggle = document.getElementById("progression-play-toggle");
@@ -16,6 +17,7 @@
   var fretscape = new Fretscape(canvasWrap);
   var drumEngine = new DrumEngine();
   var chordProgressions = [];
+  var riffs = [];
   var isHorizontallyMirrored = false;
   var isVerticallyMirrored = false;
   fretscape.setDrumEngine(drumEngine);
@@ -50,6 +52,15 @@
     return null;
   };
   /**
+   * Returns a riff object by id from loaded riff data.
+   */
+  var getRiffById = function (id) {
+    for (var i = 0; i < riffs.length; i++) {
+      if (riffs[i].id === id) return riffs[i];
+    }
+    return null;
+  };
+  /**
    * Applies currently selected progression; empty selection resets to single brick.
    */
   var applySelectedProgression = function () {
@@ -61,6 +72,37 @@
     }
     fretscape.applyChordProgression(getProgressionById(progressionSelect.value));
     syncProgressionPlayButton();
+  };
+  /**
+   * Updates riffs dropdown with loaded data.
+   */
+  var populateRiffSelect = function (riffList) {
+    if (!riffSelect) return;
+    while (riffSelect.firstChild) {
+      riffSelect.removeChild(riffSelect.firstChild);
+    }
+    var noneOption = document.createElement("option");
+    noneOption.value = "";
+    noneOption.textContent = "No riff";
+    riffSelect.appendChild(noneOption);
+    for (var i = 0; i < riffList.length; i++) {
+      var riff = riffList[i];
+      if (!riff || typeof riff.id !== "string" || typeof riff.name !== "string") continue;
+      var option = document.createElement("option");
+      option.value = riff.id;
+      option.textContent = riff.name;
+      riffSelect.appendChild(option);
+    }
+  };
+  /**
+   * Applies currently selected riff to fretspace playback.
+   */
+  var applySelectedRiff = function () {
+    if (!riffSelect) {
+      fretscape.setRiffPattern(null);
+      return;
+    }
+    fretscape.setRiffPattern(getRiffById(riffSelect.value));
   };
   /**
    * Keeps the progression play button label/state in sync with playback and selection.
@@ -153,6 +195,25 @@
         return { key: {}, patterns: [] };
       });
   };
+  /**
+   * Loads riff dataset from data folder.
+   */
+  var loadRiffs = function () {
+    if (typeof fetch !== "function") return Promise.resolve([]);
+    return fetch(encodeURI("data/riffs.JSON"))
+      .then(function (response) {
+        if (!response.ok) throw new Error("Failed to load riff data");
+        return response.json();
+      })
+      .then(function (payload) {
+        if (!payload || !payload.riffs || !payload.riffs.length) return [];
+        return payload.riffs;
+      })
+      .catch(function (error) {
+        console.warn("Riff data unavailable.", error);
+        return [];
+      });
+  };
   if (keySelect) {
     fretscape.setKey(keySelect.value || "C");
     keySelect.addEventListener("change", function () {
@@ -238,6 +299,17 @@
       drumPatternSelect.value = patterns.length ? patterns[0].id : "";
       applySelectedDrumPattern();
     });
+  }
+  if (riffSelect) {
+    riffSelect.addEventListener("change", applySelectedRiff);
+    loadRiffs().then(function (riffList) {
+      riffs = riffList;
+      populateRiffSelect(riffs);
+      riffSelect.value = "";
+      applySelectedRiff();
+    });
+  } else {
+    fretscape.setRiffPattern(null);
   }
   syncProgressionPlayButton();
 })();
