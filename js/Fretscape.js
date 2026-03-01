@@ -446,19 +446,64 @@ Fretscape.prototype._getEshape513ForDegreeToken = function (degreeToken, fallbac
 };
 
 /**
- * Returns playback note plan for one beat (note cell + chord shape context).
+ * Returns normalized bass-run spec for active mode.
+ */
+Fretscape.prototype._getBassRunSpec = function () {
+  var specs = {
+    "root": { sequence: ["root", "root", "root", "root"], shapeStrategy: "default" },
+    "root5th": { sequence: ["root", "fifth", "root", "fifth"], shapeStrategy: "default" },
+    "arpeggio135": { sequence: ["root", "third", "fifth", "root"], shapeStrategy: "default" },
+    "eshape513": { sequence: ["root", "third", "fifth", "rest"], shapeStrategy: "eshape513" }
+  };
+  var mode = this._progressionPlaybackMode || "root";
+  return specs.hasOwnProperty(mode) ? specs[mode] : specs.root;
+};
+
+/**
+ * Returns chord shape for bass-run playback using current mode strategy.
+ */
+Fretscape.prototype._getBassRunShapeForChordIndex = function (rootEntries, chordIndex, spec) {
+  if (!rootEntries || !rootEntries.length) return null;
+  var normalized = ((chordIndex % rootEntries.length) + rootEntries.length) % rootEntries.length;
+  var chordEntry = rootEntries[normalized];
+  var shape = this._getChordShapeForRootIndex(rootEntries, normalized);
+  if (!shape) return null;
+  if (spec && spec.shapeStrategy === "eshape513") {
+    shape = this._getEshape513ForDegreeToken(chordEntry && chordEntry.degreeToken, shape);
+  }
+  return shape;
+};
+
+/**
+ * Resolves a bass-run token ("root","third","fifth","rest") to a shape cell.
+ */
+Fretscape.prototype._resolveBassRunTokenCell = function (shape, token) {
+  if (!shape || token === "rest") return null;
+  if (token === "third") return shape.third || shape.root || null;
+  if (token === "fifth") return shape.fifth || shape.root || null;
+  return shape.root || null;
+};
+
+/**
+ * Returns travel anchor for rest beats so animation can move toward next chord root.
+ */
+Fretscape.prototype._getBassRunRestAnchor = function (rootEntries, chordIndex, spec) {
+  var nextShape = this._getBassRunShapeForChordIndex(rootEntries, chordIndex + 1, spec);
+  return nextShape && nextShape.root ? nextShape.root : null;
+};
+
+/**
+ * Returns playback beat frame (tones + travel anchor + chord shape).
  */
 Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootEntries) {
   if (!rootEntries || !rootEntries.length) return null;
-  var chordIndex = Math.floor(beatIndex / this._progressionBeatsPerChord) % rootEntries.length;
+  var spec = this._getBassRunSpec();
+  var chordIndex = Math.floor(beatIndex / this._progressionBeatsPerChord);
   var beatInChord = beatIndex % this._progressionBeatsPerChord;
-  var chordEntry = rootEntries[chordIndex];
-  var shape = this._getChordShapeForRootIndex(rootEntries, chordIndex);
+  var shape = this._getBassRunShapeForChordIndex(rootEntries, chordIndex, spec);
   if (!shape) return null;
-  if (this._progressionPlaybackMode === "eshape513") {
-    shape = this._getEshape513ForDegreeToken(chordEntry && chordEntry.degreeToken, shape);
-  }
-  var noteCell = shape.root;
+  var token = spec.sequence[beatInChord % spec.sequence.length];
+  var tokenCell = this._resolveBassRunTokenCell(shape, token);
   var noteCells = [];
   if (this._activeRiffBeats && this._activeRiffBeats.length === 4) {
     var riffBeat = this._activeRiffBeats[beatInChord % 4];
@@ -467,31 +512,19 @@ Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootEntries) 
         var point = this._fretspaceDeltaToWorldFromRoot(shape.root, riffBeat[r].x, riffBeat[r].y);
         if (point) noteCells.push(point);
       }
-      if (noteCells.length) {
-        noteCell = noteCells[0];
-      }
     }
   }
-  if (!noteCells.length) {
-    if (this._progressionPlaybackMode === "root5th") {
-      noteCell = (beatInChord % 2 === 1) ? shape.fifth : shape.root; /* 1,5,1,5 */
-    } else if (this._progressionPlaybackMode === "arpeggio135") {
-      var arpCycle = beatInChord % 3; /* 1,3,5 then repeat over remaining beats. */
-      if (arpCycle === 1) noteCell = shape.third;
-      if (arpCycle === 2) noteCell = shape.fifth;
-    } else if (this._progressionPlaybackMode === "eshape513") {
-      if (beatInChord === 0) noteCell = shape.root;
-      if (beatInChord === 1) noteCell = shape.third;
-      if (beatInChord === 2) noteCell = shape.fifth;
-      if (beatInChord === 3) noteCell = null; /* Beat 4 is a rest. */
-    }
-    if (noteCell) {
-      noteCells.push(noteCell);
-    }
+  if (!noteCells.length && tokenCell) {
+    noteCells.push(tokenCell);
+  }
+  var anchorCell = noteCells.length ? noteCells[0] : tokenCell;
+  if (!anchorCell && token === "rest") {
+    anchorCell = this._getBassRunRestAnchor(rootEntries, chordIndex, spec);
   }
   return {
-    noteCell: noteCell,
+    noteCell: noteCells.length ? noteCells[0] : tokenCell,
     noteCells: noteCells,
+    anchorCell: anchorCell,
     shape: shape
   };
 };
@@ -714,27 +747,36 @@ Fretscape.prototype._playProgressionBeat = function () {
     return;
   }
   var currentNotes = currentPlan.noteCells && currentPlan.noteCells.length ? currentPlan.noteCells.slice() : [];
-  var nextNotes = (nextPlan && nextPlan.noteCells && nextPlan.noteCells.length) ? nextPlan.noteCells.slice() : currentNotes.slice();
+  var nextNotes = (nextPlan && nextPlan.noteCells && nextPlan.noteCells.length) ? nextPlan.noteCells.slice() : [];
+  var currentAnchor = currentPlan.anchorCell || (currentNotes.length ? currentNotes[0] : null);
+  var nextAnchor = (nextPlan && nextPlan.anchorCell) || (nextNotes.length ? nextNotes[0] : currentAnchor);
   var nextShape = nextPlan && nextPlan.shape ? nextPlan.shape : currentPlan.shape;
   this._playDrumBeat(this._progressionBeatIndex % 4);
   for (var n = 0; n < currentNotes.length; n++) {
     this._playDotTone(currentNotes[n].xCw, currentNotes[n].yCw);
   }
-  if (currentNotes.length) {
-    this._progressionPulseFromCell = { xCw: currentNotes[0].xCw, yCw: currentNotes[0].yCw };
-    this._progressionPulseToCell = nextNotes.length
-      ? { xCw: nextNotes[0].xCw, yCw: nextNotes[0].yCw }
-      : { xCw: currentNotes[0].xCw, yCw: currentNotes[0].yCw };
+  if (currentAnchor) {
+    this._progressionPulseFromCell = { xCw: currentAnchor.xCw, yCw: currentAnchor.yCw };
+    this._progressionPulseToCell = nextAnchor
+      ? { xCw: nextAnchor.xCw, yCw: nextAnchor.yCw }
+      : { xCw: currentAnchor.xCw, yCw: currentAnchor.yCw };
     this._progressionPulseFromCells = [];
     this._progressionPulseToCells = [];
-    for (var i = 0; i < currentNotes.length; i++) {
-      this._progressionPulseFromCells.push({ xCw: currentNotes[i].xCw, yCw: currentNotes[i].yCw });
+    if (currentNotes.length) {
+      for (var i = 0; i < currentNotes.length; i++) {
+        this._progressionPulseFromCells.push({ xCw: currentNotes[i].xCw, yCw: currentNotes[i].yCw });
+      }
+    } else {
+      this._progressionPulseFromCells.push({ xCw: currentAnchor.xCw, yCw: currentAnchor.yCw });
     }
-    for (var j = 0; j < nextNotes.length; j++) {
-      this._progressionPulseToCells.push({ xCw: nextNotes[j].xCw, yCw: nextNotes[j].yCw });
-    }
-    if (!this._progressionPulseToCells.length) {
-      this._progressionPulseToCells.push({ xCw: currentNotes[0].xCw, yCw: currentNotes[0].yCw });
+    if (nextNotes.length) {
+      for (var j = 0; j < nextNotes.length; j++) {
+        this._progressionPulseToCells.push({ xCw: nextNotes[j].xCw, yCw: nextNotes[j].yCw });
+      }
+    } else if (nextAnchor) {
+      this._progressionPulseToCells.push({ xCw: nextAnchor.xCw, yCw: nextAnchor.yCw });
+    } else {
+      this._progressionPulseToCells.push({ xCw: currentAnchor.xCw, yCw: currentAnchor.yCw });
     }
   } else {
     this._clearProgressionPulse();
