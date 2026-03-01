@@ -453,7 +453,7 @@ Fretscape.prototype._getBassRunSpec = function () {
     "root": { sequence: ["root", "root", "root", "root"], shapeStrategy: "default" },
     "root5th": { sequence: ["root", "fifth", "root", "fifth"], shapeStrategy: "default" },
     "arpeggio135": { sequence: ["root", "third", "fifth", "root"], shapeStrategy: "default" },
-    "eshape513": { sequence: ["root", "third", "fifth", "rest"], shapeStrategy: "eshape513" }
+    "eshape513": { sequence: ["root", "third", "fifth", "root"], shapeStrategy: "eshape513" }
   };
   var mode = this._progressionPlaybackMode || "root";
   return specs.hasOwnProperty(mode) ? specs[mode] : specs.root;
