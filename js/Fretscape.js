@@ -446,14 +446,50 @@ Fretscape.prototype._getEshape513ForDegreeToken = function (degreeToken, fallbac
 };
 
 /**
+ * Builds C-shape 1-3-5-1 geometry with same root/third as E-shape.
+ * Fifth is placed at (x-1, y+2) in fretspace from root.
+ */
+Fretscape.prototype._getCshape1351ForDegreeToken = function (degreeToken, fallbackShape) {
+  var eshape = this._getEshape513ForDegreeToken(degreeToken, fallbackShape);
+  if (!eshape || !eshape.root) return fallbackShape;
+  var cshapeFifth = this._fretspaceDeltaToWorldFromRoot(eshape.root, -1, 2);
+  return {
+    root: eshape.root,
+    third: eshape.third || eshape.root,
+    fifth: cshapeFifth || eshape.fifth || eshape.root
+  };
+};
+
+/**
  * Returns normalized bass-run spec for active mode.
  */
 Fretscape.prototype._getBassRunSpec = function () {
   var specs = {
-    "root": { sequence: ["root", "root", "root", "root"], shapeStrategy: "default" },
-    "root5th": { sequence: ["root", "fifth", "root", "fifth"], shapeStrategy: "default" },
-    "arpeggio135": { sequence: ["root", "third", "fifth", "root"], shapeStrategy: "default" },
-    "eshape513": { sequence: ["root", "third", "fifth", "root"], shapeStrategy: "eshape513" }
+    "root": {
+      sequence: ["root", "root", "root", "root"],
+      shapeStrategy: "default",
+      guideSequence: []
+    },
+    "root5th": {
+      sequence: ["root", "fifth", "root", "fifth"],
+      shapeStrategy: "default",
+      guideSequence: ["root", "fifth"]
+    },
+    "arpeggio135": {
+      sequence: ["root", "third", "fifth", "root"],
+      shapeStrategy: "default",
+      guideSequence: ["root", "third", "fifth"]
+    },
+    "eshape513": {
+      sequence: ["root", "third", "fifth", "root"],
+      shapeStrategy: "eshape513",
+      guideSequence: ["root", "third", "fifth"]
+    },
+    "cshape1351": {
+      sequence: ["root", "third", "fifth", "root"],
+      shapeStrategy: "cshape1351",
+      guideSequence: ["root", "third", "fifth", "root"]
+    }
   };
   var mode = this._progressionPlaybackMode || "root";
   return specs.hasOwnProperty(mode) ? specs[mode] : specs.root;
@@ -470,6 +506,8 @@ Fretscape.prototype._getBassRunShapeForChordIndex = function (rootEntries, chord
   if (!shape) return null;
   if (spec && spec.shapeStrategy === "eshape513") {
     shape = this._getEshape513ForDegreeToken(chordEntry && chordEntry.degreeToken, shape);
+  } else if (spec && spec.shapeStrategy === "cshape1351") {
+    shape = this._getCshape1351ForDegreeToken(chordEntry && chordEntry.degreeToken, shape);
   }
   return shape;
 };
@@ -542,13 +580,14 @@ Fretscape.prototype._interpolateCell = function (startCell, endCell, t) {
 };
 
 /**
- * Sets bass playback mode. Supported: "root", "root5th", "arpeggio135", "eshape513".
+ * Sets bass playback mode. Supported: "root", "root5th", "arpeggio135", "eshape513", "cshape1351".
  */
 Fretscape.prototype.setProgressionPlaybackMode = function (mode) {
   var normalized = "root";
   if (mode === "root5th") normalized = "root5th";
   if (mode === "arpeggio135") normalized = "arpeggio135";
   if (mode === "eshape513") normalized = "eshape513";
+  if (mode === "cshape1351") normalized = "cshape1351";
   if (this._progressionPlaybackMode === normalized) return;
   this._progressionPlaybackMode = normalized;
   if (this._isProgressionPlaying) {
@@ -638,25 +677,29 @@ Fretscape.prototype._drawProgressionRootGuide = function () {
 };
 
 /**
- * Draws yellow playback guides for root-fifth and arpeggio modes.
+ * Draws yellow playback guide for current bass-run mode sequence.
  */
 Fretscape.prototype._drawProgressionRootToFifthGuide = function () {
-  if (this._progressionPlaybackMode !== "root5th" &&
-      this._progressionPlaybackMode !== "arpeggio135" &&
-      this._progressionPlaybackMode !== "eshape513") return;
+  var spec = this._getBassRunSpec();
+  var guide = spec && spec.guideSequence ? spec.guideSequence : [];
+  if (guide.length < 2) return;
   if (!this._progressionGuidePairFrom || !this._progressionGuidePairTo) return;
   var t = Math.max(0, Math.min(1, this._progressionPulseProgress || 0));
-  var rootNow = this._interpolateCell(this._progressionGuidePairFrom.root, this._progressionGuidePairTo.root, t);
-  var thirdNow = this._interpolateCell(this._progressionGuidePairFrom.third, this._progressionGuidePairTo.third, t);
-  var fifthNow = this._interpolateCell(this._progressionGuidePairFrom.fifth, this._progressionGuidePairTo.fifth, t);
-  if (!rootNow || !fifthNow) return;
+  var resolveGuidePoint = function (token) {
+    var fromCell = this._progressionGuidePairFrom[token];
+    var toCell = this._progressionGuidePairTo[token];
+    return this._interpolateCell(fromCell, toCell, t);
+  }.bind(this);
+  var startPoint = resolveGuidePoint(guide[0]);
+  if (!startPoint) return;
   this.ctx.save();
   this.ctx.beginPath();
-  this.ctx.moveTo(this._xCwToPx(rootNow.xCw), this._yCwToPx(rootNow.yCw));
-  if ((this._progressionPlaybackMode === "arpeggio135" || this._progressionPlaybackMode === "eshape513") && thirdNow) {
-    this.ctx.lineTo(this._xCwToPx(thirdNow.xCw), this._yCwToPx(thirdNow.yCw));
+  this.ctx.moveTo(this._xCwToPx(startPoint.xCw), this._yCwToPx(startPoint.yCw));
+  for (var i = 1; i < guide.length; i++) {
+    var point = resolveGuidePoint(guide[i]);
+    if (!point) continue;
+    this.ctx.lineTo(this._xCwToPx(point.xCw), this._yCwToPx(point.yCw));
   }
-  this.ctx.lineTo(this._xCwToPx(fifthNow.xCw), this._yCwToPx(fifthNow.yCw));
   this.ctx.strokeStyle = "#f1c40f";
   this.ctx.lineWidth = Math.max(1, this.cellWidth * 0.015);
   this.ctx.lineCap = "round";
