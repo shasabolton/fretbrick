@@ -447,16 +447,12 @@ Fretscape.prototype._getEshape513ForDegreeToken = function (degreeToken, fallbac
 
 /**
  * Builds C-shape 1-3-5-1 geometry with same root/third as E-shape.
- * Fifth is placed one string above third (and two above root) in fretspace.
+ * Fifth is placed at fixed C-shape fretspace offset (x-3, y+2) from root.
  */
 Fretscape.prototype._getCshape1351ForDegreeToken = function (degreeToken, fallbackShape) {
   var eshape = this._getEshape513ForDegreeToken(degreeToken, fallbackShape);
   if (!eshape || !eshape.root) return fallbackShape;
-  var rootSemitone = this._degreeToSemitoneOffset(degreeToken);
-  var thirdSemitone = this._getThirdSemitoneOffsetForDegree(degreeToken);
-  var thirdInterval = (rootSemitone === null || thirdSemitone === null) ? 3 : ((thirdSemitone - rootSemitone + 12) % 12);
-  var thirdXDelta = thirdInterval === 4 ? -1 : -2; /* Match chosen 3rd lane. */
-  var cshapeFifth = this._fretspaceDeltaToWorldFromRoot(eshape.root, thirdXDelta, 2);
+  var cshapeFifth = this._fretspaceDeltaToWorldFromRoot(eshape.root, -3, 2);
   return {
     root: eshape.root,
     third: eshape.third || eshape.root,
