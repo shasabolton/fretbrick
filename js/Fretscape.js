@@ -309,7 +309,7 @@ Fretscape.prototype._findRootCellInFirstBrick = function (degreeToken) {
 };
 
 /**
- * Finds the root-cell in top two rows ("highest strings") of the first brick.
+ * Finds the root-cell on the same two strings used by the green progression guide.
  */
 Fretscape.prototype._findRootCellOnTopStringsInFirstBrick = function (degreeToken) {
   if (!this.bricks.length) return null;
@@ -318,8 +318,8 @@ Fretscape.prototype._findRootCellOnTopStringsInFirstBrick = function (degreeToke
   var firstBrick = this.bricks[0];
   if (!firstBrick || !firstBrick.brick || !firstBrick.brick.cellData) return null;
   var data = firstBrick.brick.cellData;
-  var rowLimit = Math.min(2, data.length);
-  for (var r = 0; r < rowLimit; r++) {
+  var startRow = Math.max(0, data.length - 2);
+  for (var r = startRow; r < data.length; r++) {
     for (var c = 0; c < data[r].length; c++) {
       var cellSemitone = this._cellLabelToSemitoneOffset(data[r][c]);
       if (cellSemitone === targetSemitone) {
@@ -608,7 +608,9 @@ Fretscape.prototype._drawProgressionRootGuide = function () {
  * Draws yellow playback guides for root-fifth and arpeggio modes.
  */
 Fretscape.prototype._drawProgressionRootToFifthGuide = function () {
-  if (this._progressionPlaybackMode !== "root5th" && this._progressionPlaybackMode !== "arpeggio135") return;
+  if (this._progressionPlaybackMode !== "root5th" &&
+      this._progressionPlaybackMode !== "arpeggio135" &&
+      this._progressionPlaybackMode !== "eshape513") return;
   if (!this._progressionGuidePairFrom || !this._progressionGuidePairTo) return;
   var t = Math.max(0, Math.min(1, this._progressionPulseProgress || 0));
   var rootNow = this._interpolateCell(this._progressionGuidePairFrom.root, this._progressionGuidePairTo.root, t);
@@ -618,7 +620,7 @@ Fretscape.prototype._drawProgressionRootToFifthGuide = function () {
   this.ctx.save();
   this.ctx.beginPath();
   this.ctx.moveTo(this._xCwToPx(rootNow.xCw), this._yCwToPx(rootNow.yCw));
-  if (this._progressionPlaybackMode === "arpeggio135" && thirdNow) {
+  if ((this._progressionPlaybackMode === "arpeggio135" || this._progressionPlaybackMode === "eshape513") && thirdNow) {
     this.ctx.lineTo(this._xCwToPx(thirdNow.xCw), this._yCwToPx(thirdNow.yCw));
   }
   this.ctx.lineTo(this._xCwToPx(fifthNow.xCw), this._yCwToPx(fifthNow.yCw));
