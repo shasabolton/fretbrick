@@ -10,6 +10,11 @@
         "id": "down-du-up-du",
         "name": "Down-up groove (d,du,-u,du)",
         "beats": "d,du,-u,du"
+      },
+      {
+        "id": "down-slap-groove",
+        "name": "Down slap groove (d,s,d,s)",
+        "beats": "d,s,d,s"
       }
     ]
   }

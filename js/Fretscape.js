@@ -35,6 +35,7 @@ function Fretscape(containerEl) {
   this._audioCtx = null;
   this._audioCtxUnavailable = false;
   this._guitarWave = null;
+  this._slapNoiseBuffer = null;
   this._activeProgressionDegrees = null;
   this._progressionPlaybackMode = "root";
   this._isProgressionPlaying = false;
@@ -54,7 +55,7 @@ function Fretscape(containerEl) {
   this._activeStrumPattern = null;
   this._activeStrumBeats = null;
   this._activeStrumTimeline = null;
-  this._strumStrokeGapBeats = 0.1;
+  this._strumStrokeGapBeats = 0.05;
   this._progressionBpm = 100;
   this._progressionBeatsPerChord = 4;
   this._drumEngine = null;
@@ -621,11 +622,23 @@ Fretscape.prototype._buildStrumNoteEventsForBeat = function (shape, beatInChord)
   var barBeats = this._progressionBeatsPerChord;
   var beatStart = beatInChord;
   var beatEnd = beatStart + 1;
-  var strokeDelay = Math.max(0.01, this._strumStrokeGapBeats || 0.1);
+  var strokeDelay = Math.max(0.01, this._strumStrokeGapBeats || 0.05);
   for (var i = 0; i < this._activeStrumTimeline.length; i++) {
     var action = this._activeStrumTimeline[i];
     if (!action || typeof action.time !== "number") continue;
     if (action.time < beatStart || action.time >= beatEnd) continue;
+    if (action.symbol === "s") {
+      var slapDelay = action.time - beatStart;
+      if (slapDelay >= 0 && slapDelay < 1) {
+        events.push({
+          kind: "slap",
+          cell: shape.root || null,
+          delayBeats: slapDelay,
+          durationBeats: 0.08
+        });
+      }
+      continue;
+    }
     if (action.symbol !== "d" && action.symbol !== "u") continue;
     var nextBoundary = barBeats;
     for (var n = i + 1; n < this._activeStrumTimeline.length; n++) {
@@ -964,8 +977,13 @@ Fretscape.prototype._playProgressionBeat = function () {
   var beatSeconds = this._getProgressionBeatMs() / 1000;
   for (var n = 0; n < currentEvents.length; n++) {
     var event = currentEvents[n];
-    if (!event || !event.cell) continue;
+    if (!event) continue;
     var delaySec = (typeof event.delayBeats === "number") ? Math.max(0, event.delayBeats * beatSeconds) : 0;
+    if (event.kind === "slap") {
+      this._playSlapTone({ delaySec: delaySec });
+      continue;
+    }
+    if (!event.cell) continue;
     var durationSec = (typeof event.durationBeats === "number") ? Math.max(0.08, event.durationBeats * beatSeconds) : undefined;
     this._playDotTone(event.cell.xCw, event.cell.yCw, { delaySec: delaySec, durationSec: durationSec });
   }
@@ -1362,6 +1380,56 @@ Fretscape.prototype._getAudioContext = function () {
   }
   this._audioCtx = new AudioCtx();
   return this._audioCtx;
+};
+
+/**
+ * Returns cached white-noise buffer for slap/percussive strum sounds.
+ */
+Fretscape.prototype._getSlapNoiseBuffer = function (ctx) {
+  if (!ctx) return null;
+  if (this._slapNoiseBuffer) return this._slapNoiseBuffer;
+  var length = Math.max(1, Math.floor(ctx.sampleRate * 0.2));
+  var buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+  var channel = buffer.getChannelData(0);
+  for (var i = 0; i < length; i++) {
+    channel[i] = Math.random() * 2 - 1;
+  }
+  this._slapNoiseBuffer = buffer;
+  return this._slapNoiseBuffer;
+};
+
+/**
+ * Plays a short percussive slap used by strum symbol "s".
+ */
+Fretscape.prototype._playSlapTone = function (options) {
+  var opts = options || {};
+  var ctx = this._getAudioContext();
+  if (!ctx) return;
+  if (ctx.state === "suspended" && ctx.resume) {
+    ctx.resume();
+  }
+  var buffer = this._getSlapNoiseBuffer(ctx);
+  if (!buffer) return;
+  var delaySec = (typeof opts.delaySec === "number") ? Math.max(0, opts.delaySec) : 0;
+  var now = ctx.currentTime + delaySec;
+  var src = ctx.createBufferSource();
+  var highpass = ctx.createBiquadFilter();
+  var lowpass = ctx.createBiquadFilter();
+  var gain = ctx.createGain();
+  src.buffer = buffer;
+  highpass.type = "highpass";
+  highpass.frequency.setValueAtTime(700, now);
+  lowpass.type = "lowpass";
+  lowpass.frequency.setValueAtTime(4200, now);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.3, now + 0.0015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.09);
+  src.connect(highpass);
+  highpass.connect(lowpass);
+  lowpass.connect(gain);
+  gain.connect(ctx.destination);
+  src.start(now);
+  src.stop(now + 0.1);
 };
 
 /**
