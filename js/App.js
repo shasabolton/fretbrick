@@ -6,6 +6,7 @@
   var keySelect = document.getElementById("key-select");
   var progressionSelect = document.getElementById("progression-select");
   var playbackModeSelect = document.getElementById("playback-mode-select");
+  var strumPatternSelect = document.getElementById("strum-pattern-select");
   var drumPatternSelect = document.getElementById("drum-pattern-select");
   var riffSelect = document.getElementById("riff-select");
   var bpmSlider = document.getElementById("bpm-slider");
@@ -17,6 +18,7 @@
   var fretscape = new Fretscape(canvasWrap);
   var drumEngine = new DrumEngine();
   var chordProgressions = [];
+  var strumPatterns = [];
   var riffs = [];
   var isHorizontallyMirrored = false;
   var isVerticallyMirrored = false;
@@ -52,6 +54,15 @@
     return null;
   };
   /**
+   * Returns a strum pattern object by id from loaded strum data.
+   */
+  var getStrumPatternById = function (id) {
+    for (var i = 0; i < strumPatterns.length; i++) {
+      if (strumPatterns[i].id === id) return strumPatterns[i];
+    }
+    return null;
+  };
+  /**
    * Returns a riff object by id from loaded riff data.
    */
   var getRiffById = function (id) {
@@ -72,6 +83,37 @@
     }
     fretscape.applyChordProgression(getProgressionById(progressionSelect.value));
     syncProgressionPlayButton();
+  };
+  /**
+   * Updates strum dropdown with loaded strum pattern data.
+   */
+  var populateStrumPatternSelect = function (patterns) {
+    if (!strumPatternSelect) return;
+    while (strumPatternSelect.firstChild) {
+      strumPatternSelect.removeChild(strumPatternSelect.firstChild);
+    }
+    var noneOption = document.createElement("option");
+    noneOption.value = "";
+    noneOption.textContent = "No strum";
+    strumPatternSelect.appendChild(noneOption);
+    for (var i = 0; i < patterns.length; i++) {
+      var pattern = patterns[i];
+      if (!pattern || typeof pattern.id !== "string" || typeof pattern.name !== "string") continue;
+      var option = document.createElement("option");
+      option.value = pattern.id;
+      option.textContent = pattern.name;
+      strumPatternSelect.appendChild(option);
+    }
+  };
+  /**
+   * Applies selected strum pattern to progression playback engine.
+   */
+  var applySelectedStrumPattern = function () {
+    if (!strumPatternSelect) {
+      fretscape.setStrumPattern(null);
+      return;
+    }
+    fretscape.setStrumPattern(getStrumPatternById(strumPatternSelect.value));
   };
   /**
    * Updates riffs dropdown with loaded data.
@@ -196,6 +238,25 @@
       });
   };
   /**
+   * Loads strum pattern dataset from data folder.
+   */
+  var loadStrums = function () {
+    if (typeof fetch !== "function") return Promise.resolve([]);
+    return fetch(encodeURI("data/strums.JSON"))
+      .then(function (response) {
+        if (!response.ok) throw new Error("Failed to load strum data");
+        return response.json();
+      })
+      .then(function (payload) {
+        if (!payload || !payload.strums || !payload.strums.patterns || !payload.strums.patterns.length) return [];
+        return payload.strums.patterns;
+      })
+      .catch(function (error) {
+        console.warn("Strum data unavailable.", error);
+        return [];
+      });
+  };
+  /**
    * Loads riff dataset from data folder.
    */
   var loadRiffs = function () {
@@ -257,6 +318,20 @@
     });
   } else {
     fretscape.setProgressionPlaybackMode("root");
+  }
+  if (strumPatternSelect) {
+    strumPatternSelect.addEventListener("change", function () {
+      applySelectedStrumPattern();
+      syncProgressionPlayButton();
+    });
+    loadStrums().then(function (patterns) {
+      strumPatterns = patterns;
+      populateStrumPatternSelect(strumPatterns);
+      strumPatternSelect.value = "";
+      applySelectedStrumPattern();
+    });
+  } else {
+    fretscape.setStrumPattern(null);
   }
   if (bpmSlider) {
     bpmSlider.addEventListener("input", applyBpmFromSlider);

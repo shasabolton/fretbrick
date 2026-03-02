@@ -51,6 +51,10 @@ function Fretscape(containerEl) {
   this._progressionGuidePairTo = null;
   this._activeRiff = null;
   this._activeRiffBeats = null;
+  this._activeStrumPattern = null;
+  this._activeStrumBeats = null;
+  this._activeStrumTimeline = null;
+  this._strumStrokeGapBeats = 0.1;
   this._progressionBpm = 100;
   this._progressionBeatsPerChord = 4;
   this._drumEngine = null;
@@ -190,6 +194,77 @@ Fretscape.prototype.setRiffPattern = function (riff) {
   if (!this._isProgressionPlaying) {
     this._clearProgressionPulse();
   }
+  this.render();
+};
+
+/**
+ * Normalizes a strum beat token so it only contains d/u/s/- symbols.
+ */
+Fretscape.prototype._normalizeStrumBeatToken = function (token) {
+  var raw = String(token || "").toLowerCase().replace(/\s+/g, "");
+  if (!raw) return "-";
+  var normalized = "";
+  for (var i = 0; i < raw.length; i++) {
+    var symbol = raw.charAt(i);
+    if (symbol === "d" || symbol === "u" || symbol === "s" || symbol === "-") {
+      normalized += symbol;
+    }
+  }
+  return normalized || "-";
+};
+
+/**
+ * Parses a strum pattern payload into 4 normalized beat tokens.
+ */
+Fretscape.prototype._parseStrumPatternBeats = function (beatsValue) {
+  var tokens = [];
+  if (Array.isArray(beatsValue)) {
+    tokens = beatsValue.slice();
+  } else if (typeof beatsValue === "string") {
+    tokens = beatsValue.split(",");
+  }
+  var beats = [];
+  for (var i = 0; i < this._progressionBeatsPerChord; i++) {
+    var token = i < tokens.length ? tokens[i] : "-";
+    beats.push(this._normalizeStrumBeatToken(token));
+  }
+  return beats;
+};
+
+/**
+ * Builds a strum timeline with beat offsets for d/u/s actions inside one 4-beat bar.
+ */
+Fretscape.prototype._buildStrumTimeline = function (strumBeats) {
+  var timeline = [];
+  if (!strumBeats || !strumBeats.length) return timeline;
+  for (var beat = 0; beat < this._progressionBeatsPerChord; beat++) {
+    var token = this._normalizeStrumBeatToken(strumBeats[beat] || "-");
+    var steps = token ? token.split("") : ["-"];
+    var stepSize = 1 / Math.max(1, steps.length);
+    for (var step = 0; step < steps.length; step++) {
+      var symbol = steps[step];
+      if (symbol !== "d" && symbol !== "u" && symbol !== "s") continue;
+      timeline.push({ symbol: symbol, time: beat + step * stepSize });
+    }
+  }
+  return timeline;
+};
+
+/**
+ * Applies selected strum pattern. Null clears strumming and uses bass mode only.
+ */
+Fretscape.prototype.setStrumPattern = function (pattern) {
+  if (!pattern || typeof pattern !== "object") {
+    this._activeStrumPattern = null;
+    this._activeStrumBeats = null;
+    this._activeStrumTimeline = null;
+    this.render();
+    return;
+  }
+  var beats = this._parseStrumPatternBeats(pattern.beats);
+  this._activeStrumPattern = pattern;
+  this._activeStrumBeats = beats;
+  this._activeStrumTimeline = this._buildStrumTimeline(beats);
   this.render();
 };
 
@@ -489,12 +564,6 @@ Fretscape.prototype._getBassRunSpec = function () {
       sequence: ["root", "third", "fifth", "root"],
       shapeStrategy: "cshape1351",
       guideSequence: ["root", "third", "fifth", "root"]
-    },
-    "strum135": {
-      sequence: ["strum135", "hold", "hold", "hold"],
-      shapeStrategy: "cshape1351",
-      guideSequence: ["root", "third", "fifth"],
-      strumDelayBeats: 0.1
     }
   };
   var mode = this._progressionPlaybackMode || "root";
@@ -519,7 +588,7 @@ Fretscape.prototype._getBassRunShapeForChordIndex = function (rootEntries, chord
 };
 
 /**
- * Resolves a bass-run token ("root","third","fifth","rest") to a shape cell.
+ * Resolves a bass-run token ("root","third","fifth","hold","rest") to a shape cell.
  */
 Fretscape.prototype._resolveBassRunTokenCell = function (shape, token) {
   if (!shape || token === "rest") return null;
@@ -536,23 +605,65 @@ Fretscape.prototype._buildBassRunNoteEvents = function (shape, token, beatInChor
   var events = [];
   if (!shape) return events;
   if (token === "rest" || token === "hold") return events;
-  if (token === "strum135") {
-    var order = ["root", "third", "fifth"];
-    var stepDelay = spec && typeof spec.strumDelayBeats === "number" ? spec.strumDelayBeats : 0.1;
-    for (var i = 0; i < order.length; i++) {
-      var strumCell = this._resolveBassRunTokenCell(shape, order[i]);
-      if (!strumCell) continue;
-      var delayBeats = i * stepDelay;
-      var durationBeats = Math.max(0.05, this._progressionBeatsPerChord - beatInChord - delayBeats);
-      events.push({ cell: strumCell, delayBeats: delayBeats, durationBeats: durationBeats });
-    }
-    return events;
-  }
   var cell = this._resolveBassRunTokenCell(shape, token);
   if (cell) {
     events.push({ cell: cell, delayBeats: 0, durationBeats: 1 });
   }
   return events;
+};
+
+/**
+ * Builds timed strum note events for one beat from active d/u/s timeline.
+ */
+Fretscape.prototype._buildStrumNoteEventsForBeat = function (shape, beatInChord) {
+  var events = [];
+  if (!shape || !this._activeStrumTimeline || !this._activeStrumTimeline.length) return events;
+  var barBeats = this._progressionBeatsPerChord;
+  var beatStart = beatInChord;
+  var beatEnd = beatStart + 1;
+  var strokeDelay = Math.max(0.01, this._strumStrokeGapBeats || 0.1);
+  for (var i = 0; i < this._activeStrumTimeline.length; i++) {
+    var action = this._activeStrumTimeline[i];
+    if (!action || typeof action.time !== "number") continue;
+    if (action.time < beatStart || action.time >= beatEnd) continue;
+    if (action.symbol !== "d" && action.symbol !== "u") continue;
+    var nextBoundary = barBeats;
+    for (var n = i + 1; n < this._activeStrumTimeline.length; n++) {
+      var nextAction = this._activeStrumTimeline[n];
+      if (!nextAction || typeof nextAction.time !== "number") continue;
+      if (nextAction.time > action.time) {
+        nextBoundary = Math.min(barBeats, nextAction.time);
+        break;
+      }
+    }
+    var order = action.symbol === "u" ? ["fifth", "third", "root"] : ["root", "third", "fifth"];
+    for (var step = 0; step < order.length; step++) {
+      var strikeCell = this._resolveBassRunTokenCell(shape, order[step]);
+      if (!strikeCell) continue;
+      var strikeBeat = action.time + step * strokeDelay;
+      if (strikeBeat >= nextBoundary || strikeBeat >= barBeats) continue;
+      var delayBeats = strikeBeat - beatStart;
+      if (delayBeats < 0 || delayBeats >= 1) continue;
+      var durationBeats = nextBoundary - strikeBeat;
+      events.push({
+        cell: strikeCell,
+        delayBeats: delayBeats,
+        durationBeats: Math.max(0.05, durationBeats)
+      });
+    }
+  }
+  return events;
+};
+
+/**
+ * Returns playback guide token sequence, with strum taking precedence when selected.
+ */
+Fretscape.prototype._getProgressionGuideSequence = function () {
+  if (this._activeStrumBeats && this._activeStrumBeats.length === this._progressionBeatsPerChord) {
+    return ["root", "third", "fifth"];
+  }
+  var spec = this._getBassRunSpec();
+  return spec && spec.guideSequence ? spec.guideSequence : [];
 };
 
 /**
@@ -571,9 +682,11 @@ Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootEntries) 
   var spec = this._getBassRunSpec();
   var chordIndex = Math.floor(beatIndex / this._progressionBeatsPerChord);
   var beatInChord = beatIndex % this._progressionBeatsPerChord;
-  var shape = this._getBassRunShapeForChordIndex(rootEntries, chordIndex, spec);
+  var hasStrum = !!(this._activeStrumBeats && this._activeStrumBeats.length === this._progressionBeatsPerChord);
+  var shapeSpec = hasStrum ? { shapeStrategy: "cshape1351" } : spec;
+  var shape = this._getBassRunShapeForChordIndex(rootEntries, chordIndex, shapeSpec);
   if (!shape) return null;
-  var token = spec.sequence[beatInChord % spec.sequence.length];
+  var token = hasStrum ? "hold" : spec.sequence[beatInChord % spec.sequence.length];
   var tokenCell = this._resolveBassRunTokenCell(shape, token);
   var noteEvents = [];
   var noteCells = [];
@@ -586,6 +699,15 @@ Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootEntries) 
         noteCells.push(point);
         noteEvents.push({ cell: point, delayBeats: 0, durationBeats: 1 });
       }
+    }
+  }
+  if (!noteCells.length && hasStrum) {
+    noteEvents = this._buildStrumNoteEventsForBeat(shape, beatInChord);
+    for (var s = 0; s < noteEvents.length; s++) {
+      noteCells.push(noteEvents[s].cell);
+    }
+    if (!noteCells.length) {
+      noteCells.push(shape.root);
     }
   }
   if (!noteCells.length) {
@@ -623,7 +745,7 @@ Fretscape.prototype._interpolateCell = function (startCell, endCell, t) {
 };
 
 /**
- * Sets bass playback mode. Supported: "root", "root5th", "arpeggio135", "eshape513", "cshape1351", "strum135".
+ * Sets bass playback mode. Supported: "root", "root5th", "arpeggio135", "eshape513", "cshape1351".
  */
 Fretscape.prototype.setProgressionPlaybackMode = function (mode) {
   var normalized = "root";
@@ -631,7 +753,7 @@ Fretscape.prototype.setProgressionPlaybackMode = function (mode) {
   if (mode === "arpeggio135") normalized = "arpeggio135";
   if (mode === "eshape513") normalized = "eshape513";
   if (mode === "cshape1351") normalized = "cshape1351";
-  if (mode === "strum135") normalized = "strum135";
+  if (mode === "strum135") normalized = "cshape1351";
   if (this._progressionPlaybackMode === normalized) return;
   this._progressionPlaybackMode = normalized;
   if (this._isProgressionPlaying) {
@@ -724,8 +846,7 @@ Fretscape.prototype._drawProgressionRootGuide = function () {
  * Draws yellow playback guide for current bass-run mode sequence.
  */
 Fretscape.prototype._drawProgressionRootToFifthGuide = function () {
-  var spec = this._getBassRunSpec();
-  var guide = spec && spec.guideSequence ? spec.guideSequence : [];
+  var guide = this._getProgressionGuideSequence();
   if (guide.length < 2) return;
   if (!this._progressionGuidePairFrom || !this._progressionGuidePairTo) return;
   var t = Math.max(0, Math.min(1, this._progressionPulseProgress || 0));

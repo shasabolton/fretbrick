@@ -1,0 +1,16 @@
+{
+  "strums": {
+    "patterns": [
+      {
+        "id": "down-135",
+        "name": "Down (d,-,-,-)",
+        "beats": "d,-,-,-"
+      },
+      {
+        "id": "down-du-up-du",
+        "name": "Down-up groove (d,du,-u,du)",
+        "beats": "d,du,-u,du"
+      }
+    ]
+  }
+}
