@@ -659,6 +659,7 @@ Fretscape.prototype._buildStrumNoteEventsForBeat = function (shape, beatInChord)
       if (delayBeats < 0 || delayBeats >= 1) continue;
       var durationBeats = nextBoundary - strikeBeat;
       events.push({
+        kind: "strum",
         cell: strikeCell,
         delayBeats: delayBeats,
         durationBeats: Math.max(0.05, durationBeats)
@@ -985,7 +986,11 @@ Fretscape.prototype._playProgressionBeat = function () {
     }
     if (!event.cell) continue;
     var durationSec = (typeof event.durationBeats === "number") ? Math.max(0.08, event.durationBeats * beatSeconds) : undefined;
-    this._playDotTone(event.cell.xCw, event.cell.yCw, { delaySec: delaySec, durationSec: durationSec });
+    this._playDotTone(event.cell.xCw, event.cell.yCw, {
+      delaySec: delaySec,
+      durationSec: durationSec,
+      sustainHold: event.kind === "strum"
+    });
   }
   if (currentAnchor) {
     this._progressionPulseFromCell = { xCw: currentAnchor.xCw, yCw: currentAnchor.yCw };
@@ -1451,6 +1456,7 @@ Fretscape.prototype._playDotTone = function (dotX, dotY, options) {
   }
   var delaySec = (typeof opts.delaySec === "number") ? Math.max(0, opts.delaySec) : 0;
   var durationSec = (typeof opts.durationSec === "number") ? Math.max(0.12, opts.durationSec) : 0.7;
+  var useSustainHold = !!opts.sustainHold;
   var now = ctx.currentTime + delaySec;
   var osc = ctx.createOscillator();
   var wave = this._getGuitarPeriodicWave(ctx);
@@ -1472,16 +1478,26 @@ Fretscape.prototype._playDotTone = function (dotX, dotY, options) {
   bodyFilter.frequency.value = 190;
   bodyFilter.Q.value = 0.9;
   bodyFilter.gain.value = 4;
+  var sustainGain = useSustainHold ? 0.11 : 0.075;
+  var decayEnd = now + Math.min(0.08, durationSec * 0.35);
   gain.gain.setValueAtTime(0.0001, now);
   gain.gain.exponentialRampToValueAtTime(0.22, now + 0.004);
-  gain.gain.exponentialRampToValueAtTime(0.075, now + Math.min(0.08, durationSec * 0.35));
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + durationSec);
+  gain.gain.exponentialRampToValueAtTime(sustainGain, decayEnd);
+  if (useSustainHold && durationSec > 0.14) {
+    /* Hold strum energy until near release so notes ring to the next strum boundary. */
+    var releaseStart = now + Math.max(0.08, durationSec - 0.06);
+    if (releaseStart < decayEnd) releaseStart = decayEnd;
+    gain.gain.setValueAtTime(sustainGain, releaseStart);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + durationSec);
+  } else {
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + durationSec);
+  }
   osc.connect(toneFilter);
   toneFilter.connect(bodyFilter);
   bodyFilter.connect(gain);
   gain.connect(ctx.destination);
   osc.start(now);
-  osc.stop(now + durationSec + 0.05);
+  osc.stop(now + durationSec + 0.06);
 };
 
 /**
