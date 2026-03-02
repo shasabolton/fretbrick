@@ -15,7 +15,23 @@
         "id": "down-slap-groove",
         "name": "Down slap groove (d,s,d,s)",
         "beats": "d,s,d,s"
+      },
+      {
+        "id": "d-d-",
+        "name": "d,-,d,-",
+        "beats": "d,d,d,d"
+      },
+      {
+        "id": "down-du-up-du",
+        "name": "Down-up groove (d,du,-u,du)",
+        "beats": "d,du,-u,du"
+      },
+      {
+        "id": "ringa-chick",
+        "name": "ringa-chick (du,su,du,su)",
+        "beats": "du,su,du,su"
       }
     ]
   }
 }
+
