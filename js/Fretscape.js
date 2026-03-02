@@ -489,6 +489,12 @@ Fretscape.prototype._getBassRunSpec = function () {
       sequence: ["root", "third", "fifth", "root"],
       shapeStrategy: "cshape1351",
       guideSequence: ["root", "third", "fifth", "root"]
+    },
+    "strum135": {
+      sequence: ["strum135", "hold", "hold", "hold"],
+      shapeStrategy: "cshape1351",
+      guideSequence: ["root", "third", "fifth"],
+      strumDelayBeats: 0.1
     }
   };
   var mode = this._progressionPlaybackMode || "root";
@@ -517,9 +523,36 @@ Fretscape.prototype._getBassRunShapeForChordIndex = function (rootEntries, chord
  */
 Fretscape.prototype._resolveBassRunTokenCell = function (shape, token) {
   if (!shape || token === "rest") return null;
+  if (token === "hold") return shape.root || null;
   if (token === "third") return shape.third || shape.root || null;
   if (token === "fifth") return shape.fifth || shape.root || null;
   return shape.root || null;
+};
+
+/**
+ * Converts a bass-run token into timed note events for one beat.
+ */
+Fretscape.prototype._buildBassRunNoteEvents = function (shape, token, beatInChord, spec) {
+  var events = [];
+  if (!shape) return events;
+  if (token === "rest" || token === "hold") return events;
+  if (token === "strum135") {
+    var order = ["root", "third", "fifth"];
+    var stepDelay = spec && typeof spec.strumDelayBeats === "number" ? spec.strumDelayBeats : 0.1;
+    for (var i = 0; i < order.length; i++) {
+      var strumCell = this._resolveBassRunTokenCell(shape, order[i]);
+      if (!strumCell) continue;
+      var delayBeats = i * stepDelay;
+      var durationBeats = Math.max(0.05, this._progressionBeatsPerChord - beatInChord - delayBeats);
+      events.push({ cell: strumCell, delayBeats: delayBeats, durationBeats: durationBeats });
+    }
+    return events;
+  }
+  var cell = this._resolveBassRunTokenCell(shape, token);
+  if (cell) {
+    events.push({ cell: cell, delayBeats: 0, durationBeats: 1 });
+  }
+  return events;
 };
 
 /**
@@ -531,7 +564,7 @@ Fretscape.prototype._getBassRunRestAnchor = function (rootEntries, chordIndex, s
 };
 
 /**
- * Returns playback beat frame (tones + travel anchor + chord shape).
+ * Returns playback beat frame (timed notes + travel anchor + chord shape).
  */
 Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootEntries) {
   if (!rootEntries || !rootEntries.length) return null;
@@ -542,18 +575,27 @@ Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootEntries) 
   if (!shape) return null;
   var token = spec.sequence[beatInChord % spec.sequence.length];
   var tokenCell = this._resolveBassRunTokenCell(shape, token);
+  var noteEvents = [];
   var noteCells = [];
   if (this._activeRiffBeats && this._activeRiffBeats.length === 4) {
     var riffBeat = this._activeRiffBeats[beatInChord % 4];
     if (riffBeat && riffBeat.length) {
       for (var r = 0; r < riffBeat.length; r++) {
         var point = this._fretspaceDeltaToWorldFromRoot(shape.root, riffBeat[r].x, riffBeat[r].y);
-        if (point) noteCells.push(point);
+        if (!point) continue;
+        noteCells.push(point);
+        noteEvents.push({ cell: point, delayBeats: 0, durationBeats: 1 });
       }
     }
   }
+  if (!noteCells.length) {
+    noteEvents = this._buildBassRunNoteEvents(shape, token, beatInChord, spec);
+    for (var e = 0; e < noteEvents.length; e++) {
+      noteCells.push(noteEvents[e].cell);
+    }
+  }
   if (!noteCells.length && tokenCell) {
-    noteCells.push(tokenCell);
+    noteCells.push(tokenCell); /* keep anchor continuity for hold/rest behavior */
   }
   var anchorCell = noteCells.length ? noteCells[0] : tokenCell;
   if (!anchorCell && token === "rest") {
@@ -562,6 +604,7 @@ Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootEntries) 
   return {
     noteCell: noteCells.length ? noteCells[0] : tokenCell,
     noteCells: noteCells,
+    noteEvents: noteEvents,
     anchorCell: anchorCell,
     shape: shape
   };
@@ -580,7 +623,7 @@ Fretscape.prototype._interpolateCell = function (startCell, endCell, t) {
 };
 
 /**
- * Sets bass playback mode. Supported: "root", "root5th", "arpeggio135", "eshape513", "cshape1351".
+ * Sets bass playback mode. Supported: "root", "root5th", "arpeggio135", "eshape513", "cshape1351", "strum135".
  */
 Fretscape.prototype.setProgressionPlaybackMode = function (mode) {
   var normalized = "root";
@@ -588,6 +631,7 @@ Fretscape.prototype.setProgressionPlaybackMode = function (mode) {
   if (mode === "arpeggio135") normalized = "arpeggio135";
   if (mode === "eshape513") normalized = "eshape513";
   if (mode === "cshape1351") normalized = "cshape1351";
+  if (mode === "strum135") normalized = "strum135";
   if (this._progressionPlaybackMode === normalized) return;
   this._progressionPlaybackMode = normalized;
   if (this._isProgressionPlaying) {
@@ -790,13 +834,19 @@ Fretscape.prototype._playProgressionBeat = function () {
     return;
   }
   var currentNotes = currentPlan.noteCells && currentPlan.noteCells.length ? currentPlan.noteCells.slice() : [];
+  var currentEvents = currentPlan.noteEvents && currentPlan.noteEvents.length ? currentPlan.noteEvents.slice() : [];
   var nextNotes = (nextPlan && nextPlan.noteCells && nextPlan.noteCells.length) ? nextPlan.noteCells.slice() : [];
   var currentAnchor = currentPlan.anchorCell || (currentNotes.length ? currentNotes[0] : null);
   var nextAnchor = (nextPlan && nextPlan.anchorCell) || (nextNotes.length ? nextNotes[0] : currentAnchor);
   var nextShape = nextPlan && nextPlan.shape ? nextPlan.shape : currentPlan.shape;
   this._playDrumBeat(this._progressionBeatIndex % 4);
-  for (var n = 0; n < currentNotes.length; n++) {
-    this._playDotTone(currentNotes[n].xCw, currentNotes[n].yCw);
+  var beatSeconds = this._getProgressionBeatMs() / 1000;
+  for (var n = 0; n < currentEvents.length; n++) {
+    var event = currentEvents[n];
+    if (!event || !event.cell) continue;
+    var delaySec = (typeof event.delayBeats === "number") ? Math.max(0, event.delayBeats * beatSeconds) : 0;
+    var durationSec = (typeof event.durationBeats === "number") ? Math.max(0.08, event.durationBeats * beatSeconds) : undefined;
+    this._playDotTone(event.cell.xCw, event.cell.yCw, { delaySec: delaySec, durationSec: durationSec });
   }
   if (currentAnchor) {
     this._progressionPulseFromCell = { xCw: currentAnchor.xCw, yCw: currentAnchor.yCw };
@@ -1196,7 +1246,8 @@ Fretscape.prototype._getAudioContext = function () {
 /**
  * Plays a plucked tone from semitone offset where left=+1 and down=+5 from (0,0).
  */
-Fretscape.prototype._playDotTone = function (dotX, dotY) {
+Fretscape.prototype._playDotTone = function (dotX, dotY, options) {
+  var opts = options || {};
   var coord = this._dotToDisplayCoord(dotX, dotY);
   var semitoneOffset = coord.x + 5 * coord.y;
   var rootFromLowE = this._getKeySemitoneFromLowE();
@@ -1209,7 +1260,9 @@ Fretscape.prototype._playDotTone = function (dotX, dotY) {
   if (ctx.state === "suspended" && ctx.resume) {
     ctx.resume();
   }
-  var now = ctx.currentTime;
+  var delaySec = (typeof opts.delaySec === "number") ? Math.max(0, opts.delaySec) : 0;
+  var durationSec = (typeof opts.durationSec === "number") ? Math.max(0.12, opts.durationSec) : 0.7;
+  var now = ctx.currentTime + delaySec;
   var osc = ctx.createOscillator();
   var wave = this._getGuitarPeriodicWave(ctx);
   var toneFilter = ctx.createBiquadFilter();
@@ -1224,7 +1277,7 @@ Fretscape.prototype._playDotTone = function (dotX, dotY) {
   osc.frequency.exponentialRampToValueAtTime(frequency, now + 0.03);
   toneFilter.type = "lowpass";
   toneFilter.frequency.setValueAtTime(2600, now);
-  toneFilter.frequency.exponentialRampToValueAtTime(1200, now + 0.3);
+  toneFilter.frequency.exponentialRampToValueAtTime(1200, now + Math.min(0.3, durationSec));
   toneFilter.Q.value = 1.2;
   bodyFilter.type = "peaking";
   bodyFilter.frequency.value = 190;
@@ -1232,14 +1285,14 @@ Fretscape.prototype._playDotTone = function (dotX, dotY) {
   bodyFilter.gain.value = 4;
   gain.gain.setValueAtTime(0.0001, now);
   gain.gain.exponentialRampToValueAtTime(0.22, now + 0.004);
-  gain.gain.exponentialRampToValueAtTime(0.075, now + 0.08);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.65);
+  gain.gain.exponentialRampToValueAtTime(0.075, now + Math.min(0.08, durationSec * 0.35));
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + durationSec);
   osc.connect(toneFilter);
   toneFilter.connect(bodyFilter);
   bodyFilter.connect(gain);
   gain.connect(ctx.destination);
   osc.start(now);
-  osc.stop(now + 0.7);
+  osc.stop(now + durationSec + 0.05);
 };
 
 /**
