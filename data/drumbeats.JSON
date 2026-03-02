@@ -1,0 +1,23 @@
+{
+  "drumbeats": {
+    "key": {
+      "k": "kick",
+      "h": "hat",
+      "s": "snare",
+      "d": "ding",
+      "c": "click"
+    },
+    "patterns": [
+      {
+        "id": "boom-kah",
+        "name": "Boom Kah",
+        "beats": ["k,h", "h", "s,h", "h"]
+      },
+      {
+        "id": "metronome",
+        "name": "Metronome",
+        "beats": ["d", "c", "c", "c"]
+      }
+    ]
+  }
+}

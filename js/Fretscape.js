@@ -35,6 +35,26 @@ function Fretscape(containerEl) {
   this._audioCtx = null;
   this._audioCtxUnavailable = false;
   this._guitarWave = null;
+  this._activeProgressionDegrees = null;
+  this._progressionPlaybackMode = "root";
+  this._isProgressionPlaying = false;
+  this._progressionBeatTimer = null;
+  this._progressionAnimationFrame = null;
+  this._progressionBeatIndex = 0;
+  this._progressionPulseStartMs = 0;
+  this._progressionPulseFromCell = null;
+  this._progressionPulseToCell = null;
+  this._progressionPulseFromCells = [];
+  this._progressionPulseToCells = [];
+  this._progressionPulseProgress = 0;
+  this._progressionGuidePairFrom = null;
+  this._progressionGuidePairTo = null;
+  this._activeRiff = null;
+  this._activeRiffBeats = null;
+  this._progressionBpm = 100;
+  this._progressionBeatsPerChord = 4;
+  this._drumEngine = null;
+  this.onProgressionPlaybackStateChange = null;
   var self = this;
   window.addEventListener("resize", function () { self.render(); });
   this._bindInput();
@@ -73,9 +93,121 @@ Fretscape.prototype.setKey = function (key) {
 };
 
 /**
- * Converts a scale-degree token (for example "vi" or "bVII") into semitone offset from I.
+ * Sets external drum engine used by progression transport.
  */
-Fretscape.prototype._degreeToSemitoneOffset = function (degreeToken) {
+Fretscape.prototype.setDrumEngine = function (drumEngine) {
+  this._drumEngine = drumEngine || null;
+};
+
+/**
+ * Plays one drum beat when a drum pattern is selected.
+ */
+Fretscape.prototype._playDrumBeat = function (beatIndex) {
+  if (!this._drumEngine || typeof this._drumEngine.playBeat !== "function") return;
+  this._drumEngine.playBeat(beatIndex);
+};
+
+/**
+ * Converts a semitone distance into compact fretspace offsets where semitones = x + 5*y.
+ */
+Fretscape.prototype._semitoneToFretspaceOffset = function (semitone) {
+  var best = { x: semitone, y: 0 };
+  var bestScore = Number.POSITIVE_INFINITY;
+  for (var y = -3; y <= 3; y++) {
+    var x = semitone - 5 * y;
+    var score = Math.abs(x) + Math.abs(y) * 2;
+    if (score < bestScore) {
+      bestScore = score;
+      best = { x: x, y: y };
+    }
+  }
+  return best;
+};
+
+/**
+ * Converts fretspace deltas (x,y) from a root cell into world coordinates.
+ * +x and +y both move up in tone in fretspace.
+ */
+Fretscape.prototype._fretspaceDeltaToWorldFromRoot = function (rootCell, xDelta, yDelta) {
+  if (!rootCell) return null;
+  var rootX = (typeof rootCell.xCw === "number") ? rootCell.xCw : rootCell.x;
+  var rootY = (typeof rootCell.yCw === "number") ? rootCell.yCw : rootCell.y;
+  if (typeof rootX !== "number" || typeof rootY !== "number") return null;
+  var rootDisplayX = this._worldXToDisplayX(rootX);
+  var rootDisplayY = this._worldYToDisplayY(rootY);
+  var displayDeltaX = this._isLeftHanded ? xDelta : -xDelta;
+  var displayDeltaY = this._isVerticallyMirrored ? -yDelta : yDelta;
+  var noteDisplayX = rootDisplayX + displayDeltaX;
+  var noteDisplayY = rootDisplayY + displayDeltaY;
+  return {
+    xCw: this._displayXToWorldX(noteDisplayX),
+    yCw: this._displayYToWorldY(noteDisplayY)
+  };
+};
+
+/**
+ * Parses riff note string like "(0,0002),(-1,0200)" into 4-beat fretspace offsets.
+ */
+Fretscape.prototype._parseRiffNotes = function (notesString) {
+  var beats = [[], [], [], []];
+  if (typeof notesString !== "string") return beats;
+  var re = /\(\s*(-?\d+)\s*,\s*([^)]+)\)/g;
+  var match;
+  while ((match = re.exec(notesString))) {
+    var y = parseInt(match[1], 10);
+    if (isNaN(y)) continue;
+    var sequenceRaw = String(match[2] || "").trim();
+    if (!sequenceRaw) continue;
+    var compact = sequenceRaw.replace(/\s+/g, "");
+    var tokens = compact.indexOf(",") >= 0 ? compact.split(",") : compact.split("");
+    for (var i = 0; i < 4; i++) {
+      var token = i < tokens.length ? String(tokens[i] || "").trim() : "-";
+      if (!token || token === "-") continue;
+      var x = parseInt(token, 10);
+      if (isNaN(x)) continue;
+      beats[i].push({ x: x, y: y });
+    }
+  }
+  return beats;
+};
+
+/**
+ * Applies selected riff object. notes/tab string maps fretspace coordinates per beat.
+ */
+Fretscape.prototype.setRiffPattern = function (riff) {
+  if (!riff || typeof riff !== "object") {
+    this._activeRiff = null;
+    this._activeRiffBeats = null;
+    this._clearProgressionPulse();
+    this.render();
+    return;
+  }
+  var riffString = "";
+  if (typeof riff.notes === "string") riffString = riff.notes;
+  else if (typeof riff.tab === "string") riffString = riff.tab;
+  this._activeRiff = riff;
+  this._activeRiffBeats = this._parseRiffNotes(riffString);
+  if (!this._isProgressionPlaying) {
+    this._clearProgressionPulse();
+  }
+  this.render();
+};
+
+/**
+ * Clears transient playback dots between transport states.
+ */
+Fretscape.prototype._clearProgressionPulse = function () {
+  this._progressionPulseFromCell = null;
+  this._progressionPulseToCell = null;
+  this._progressionPulseFromCells = [];
+  this._progressionPulseToCells = [];
+  this._progressionPulseProgress = 0;
+};
+
+/**
+ * Parses a roman-numeral degree token and returns degree index + accidental.
+ */
+Fretscape.prototype._parseDegreeToken = function (degreeToken) {
   if (typeof degreeToken !== "string") return null;
   var token = degreeToken.trim();
   if (!token) return null;
@@ -84,36 +216,62 @@ Fretscape.prototype._degreeToSemitoneOffset = function (degreeToken) {
     accidental += token.charAt(0) === "#" ? 1 : -1;
     token = token.slice(1);
   }
+  if (!token) return null;
   var degree = token.toUpperCase();
-  var degreeToSemitone = {
-    "I": 0,
-    "II": 2,
-    "III": 4,
-    "IV": 5,
-    "V": 7,
-    "VI": 9,
-    "VII": 11
-  };
-  if (!degreeToSemitone.hasOwnProperty(degree)) return null;
-  var semitone = degreeToSemitone[degree] + accidental;
+  var degreeOrder = ["I", "II", "III", "IV", "V", "VI", "VII"];
+  var degreeIndex = degreeOrder.indexOf(degree);
+  if (degreeIndex < 0) return null;
+  return { degreeIndex: degreeIndex, accidental: accidental };
+};
+
+/**
+ * Converts a scale-degree token (for example "vi" or "bVII") into semitone offset from I.
+ */
+Fretscape.prototype._degreeToSemitoneOffset = function (degreeToken) {
+  var parsed = this._parseDegreeToken(degreeToken);
+  if (!parsed) return null;
+  var scaleSemitones = [0, 2, 4, 5, 7, 9, 11];
+  var semitone = scaleSemitones[parsed.degreeIndex] + parsed.accidental;
   return ((semitone % 12) + 12) % 12;
 };
 
 /**
- * Chooses a compact lattice offset for a semitone offset where x + 5y = semitones.
+ * Returns the diatonic scale-index (0..6) for a degree token, or null if invalid.
  */
-Fretscape.prototype._semitoneToLatticeOffset = function (semitoneOffset) {
-  var best = { x: semitoneOffset, y: 0 };
-  var bestScore = Number.POSITIVE_INFINITY;
-  for (var y = -3; y <= 3; y++) {
-    var x = semitoneOffset - 5 * y;
-    var score = Math.abs(x) + Math.abs(y) * 2;
-    if (score < bestScore) {
-      bestScore = score;
-      best = { x: x, y: y };
-    }
+Fretscape.prototype._degreeToScaleIndex = function (degreeToken) {
+  var parsed = this._parseDegreeToken(degreeToken);
+  return parsed ? parsed.degreeIndex : null;
+};
+
+/**
+ * Returns the semitone for the scale-tone between a chord root and its fifth (the chord third).
+ */
+Fretscape.prototype._getThirdSemitoneOffsetForDegree = function (degreeToken) {
+  var rootSemitone = this._degreeToSemitoneOffset(degreeToken);
+  var rootScaleIndex = this._degreeToScaleIndex(degreeToken);
+  if (rootSemitone === null || rootScaleIndex === null) return null;
+  var thirdIntervalsByScaleIndex = [4, 3, 3, 4, 4, 3, 3];
+  var interval = thirdIntervalsByScaleIndex[rootScaleIndex];
+  return ((rootSemitone + interval) % 12 + 12) % 12;
+};
+
+/**
+ * Converts a Brick cell label (for example "4" or "b6") into semitone offset from "1".
+ */
+Fretscape.prototype._cellLabelToSemitoneOffset = function (labelToken) {
+  if (typeof labelToken !== "string") return null;
+  var token = labelToken.trim();
+  if (!token) return null;
+  var accidental = 0;
+  while (token.charAt(0) === "#" || token.charAt(0) === "b") {
+    accidental += token.charAt(0) === "#" ? 1 : -1;
+    token = token.slice(1);
   }
-  return best;
+  var degreeNum = parseInt(token, 10);
+  if (!degreeNum || degreeNum < 1 || degreeNum > 7) return null;
+  var degreeSemitones = [0, 2, 4, 5, 7, 9, 11];
+  var semitone = degreeSemitones[degreeNum - 1] + accidental;
+  return ((semitone % 12) + 12) % 12;
 };
 
 /**
@@ -129,44 +287,620 @@ Fretscape.prototype._getDefaultBrickTopLeft = function () {
 };
 
 /**
- * Builds top-left brick coordinates for the provided progression definition.
+ * Finds the root-cell position for a degree in the first brick, using only the bottom two rows.
  */
-Fretscape.prototype._buildProgressionLayout = function (progression) {
-  var degrees = progression && progression.degrees ? progression.degrees : null;
-  var baseOrigin = this._getOneCellCenter();
-  var layout = [];
-  if (!degrees || !degrees.length) {
-    layout.push(this._getDefaultBrickTopLeft());
-    return layout;
+Fretscape.prototype._findRootCellInFirstBrick = function (degreeToken) {
+  if (!this.bricks.length) return null;
+  var targetSemitone = this._degreeToSemitoneOffset(degreeToken);
+  if (targetSemitone === null) return null;
+  var firstBrick = this.bricks[0];
+  if (!firstBrick || !firstBrick.brick || !firstBrick.brick.cellData) return null;
+  var data = firstBrick.brick.cellData;
+  var startRow = Math.max(0, data.length - 2);
+  for (var r = startRow; r < data.length; r++) {
+    for (var c = 0; c < data[r].length; c++) {
+      var cellSemitone = this._cellLabelToSemitoneOffset(data[r][c]);
+      if (cellSemitone === targetSemitone) {
+        return { xCw: firstBrick.xCw + c, yCw: firstBrick.yCw + r };
+      }
+    }
   }
-  for (var i = 0; i < degrees.length; i++) {
-    var semitone = this._degreeToSemitoneOffset(degrees[i]);
-    if (semitone === null) continue;
-    var latticeOffset = this._semitoneToLatticeOffset(semitone);
-    var brick = new Brick();
-    var originOffset = this._getBrickOriginOffset(brick);
-    var targetOriginX = baseOrigin.x - latticeOffset.x;
-    var targetOriginY = baseOrigin.y + latticeOffset.y;
-    var snappedOrigin = this._snapToLattice(targetOriginX, targetOriginY, originOffset);
-    layout.push({
-      x: snappedOrigin.x - originOffset.col,
-      y: snappedOrigin.y - originOffset.row
-    });
-  }
-  if (!layout.length) {
-    layout.push(this._getDefaultBrickTopLeft());
-  }
-  return layout;
+  return null;
 };
 
 /**
- * Replaces current bricks with default or progression-based brick layout.
+ * Finds the root-cell on the same two strings used by the green progression guide.
+ */
+Fretscape.prototype._findRootCellOnTopStringsInFirstBrick = function (degreeToken) {
+  if (!this.bricks.length) return null;
+  var targetSemitone = this._degreeToSemitoneOffset(degreeToken);
+  if (targetSemitone === null) return null;
+  var firstBrick = this.bricks[0];
+  if (!firstBrick || !firstBrick.brick || !firstBrick.brick.cellData) return null;
+  var data = firstBrick.brick.cellData;
+  var startRow = Math.max(0, data.length - 2);
+  for (var r = startRow; r < data.length; r++) {
+    for (var c = 0; c < data[r].length; c++) {
+      var cellSemitone = this._cellLabelToSemitoneOffset(data[r][c]);
+      if (cellSemitone === targetSemitone) {
+        return { xCw: firstBrick.xCw + c, yCw: firstBrick.yCw + r };
+      }
+    }
+  }
+  return null;
+};
+
+/**
+ * Finds nearest cell in the first brick with matching semitone.
+ */
+Fretscape.prototype._findNearestCellInFirstBrickBySemitone = function (targetSemitone, referenceCell) {
+  if (!this.bricks.length) return null;
+  var firstBrick = this.bricks[0];
+  if (!firstBrick || !firstBrick.brick || !firstBrick.brick.cellData) return null;
+  var data = firstBrick.brick.cellData;
+  var best = null;
+  var bestDist = Number.POSITIVE_INFINITY;
+  for (var r = 0; r < data.length; r++) {
+    for (var c = 0; c < data[r].length; c++) {
+      var cellSemitone = this._cellLabelToSemitoneOffset(data[r][c]);
+      if (cellSemitone !== targetSemitone) continue;
+      var candidate = { xCw: firstBrick.xCw + c, yCw: firstBrick.yCw + r };
+      var dx = referenceCell ? candidate.xCw - referenceCell.xCw : 0;
+      var dy = referenceCell ? candidate.yCw - referenceCell.yCw : 0;
+      var dist = referenceCell ? (dx * dx + dy * dy) : 0;
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = candidate;
+      }
+    }
+  }
+  return best;
+};
+
+/**
+ * Builds root entries for the active progression on the first brick.
+ */
+Fretscape.prototype._getActiveProgressionRootEntries = function () {
+  var entries = [];
+  if (!this._activeProgressionDegrees || !this._activeProgressionDegrees.length) return entries;
+  var firstBrick = this.bricks.length ? this.bricks[0] : null;
+  var canReadBrickLabels = !!(firstBrick && firstBrick.brick && firstBrick.brick.cellData);
+  for (var i = 0; i < this._activeProgressionDegrees.length; i++) {
+    var token = this._activeProgressionDegrees[i];
+    if (canReadBrickLabels) {
+      var rootCell = this._findRootCellInFirstBrick(token);
+      if (rootCell) {
+        entries.push({ degreeToken: token, rootCell: rootCell });
+        continue;
+      }
+    }
+    var semitone = this._degreeToSemitoneOffset(token);
+    if (semitone === null) continue;
+    var offset = this._semitoneToFretspaceOffset(semitone);
+    var fallbackRoot = this._fretspaceDeltaToWorldFromRoot(this._getOneCellCenter(), offset.x, offset.y);
+    if (!fallbackRoot) continue;
+    entries.push({ degreeToken: token, rootCell: fallbackRoot });
+  }
+  return entries;
+};
+
+/**
+ * Builds root-cell list for the active progression on the first brick.
+ */
+Fretscape.prototype._getActiveProgressionRootCells = function () {
+  var cells = [];
+  var entries = this._getActiveProgressionRootEntries();
+  for (var i = 0; i < entries.length; i++) {
+    cells.push(entries[i].rootCell);
+  }
+  return cells;
+};
+
+/**
+ * Returns the cell one row above in the first brick, or null when out of bounds.
+ */
+Fretscape.prototype._getCellAboveInFirstBrick = function (cell) {
+  if (!cell || !this.bricks.length) return null;
+  var firstBrick = this.bricks[0];
+  if (!firstBrick) return null;
+  var minY = firstBrick.yCw;
+  var maxY = firstBrick.yCw + this.brickHeightCw - 1;
+  var targetY = cell.yCw - 1;
+  if (targetY < minY || targetY > maxY) return null;
+  return { xCw: cell.xCw, yCw: targetY };
+};
+
+/**
+ * Returns root/third/fifth cells for a chord index in the active progression.
+ */
+Fretscape.prototype._getChordShapeForRootIndex = function (rootEntries, rootIndex) {
+  if (!rootEntries || !rootEntries.length) return null;
+  var normalized = ((rootIndex % rootEntries.length) + rootEntries.length) % rootEntries.length;
+  var entry = rootEntries[normalized];
+  if (!entry || !entry.rootCell) return null;
+  var root = entry.rootCell;
+  var fifth = this._getCellAboveInFirstBrick(root);
+  var thirdSemitone = this._getThirdSemitoneOffsetForDegree(entry.degreeToken);
+  var third = thirdSemitone === null ? null : this._findNearestCellInFirstBrickBySemitone(thirdSemitone, root);
+  return { root: root, third: third || root, fifth: fifth || root };
+};
+
+/**
+ * Builds E-shape 5-1-3 geometry from root on top two strings of center brick.
+ */
+Fretscape.prototype._getEshape513ForDegreeToken = function (degreeToken, fallbackShape) {
+  if (!fallbackShape) return null;
+  var root = this._findRootCellOnTopStringsInFirstBrick(degreeToken) || fallbackShape.root;
+  if (!root) return fallbackShape;
+  var rootSemitone = this._degreeToSemitoneOffset(degreeToken);
+  var thirdSemitone = this._getThirdSemitoneOffsetForDegree(degreeToken);
+  var thirdInterval = (rootSemitone === null || thirdSemitone === null) ? 3 : ((thirdSemitone - rootSemitone + 12) % 12);
+  var thirdXDelta = thirdInterval === 4 ? -1 : -2; /* Major => -1, minor/diminished => -2. */
+  var third = this._fretspaceDeltaToWorldFromRoot(root, thirdXDelta, 1);
+  var fifth = this._fretspaceDeltaToWorldFromRoot(root, 0, -1);
+  return {
+    root: root,
+    third: third || fallbackShape.third || root,
+    fifth: fifth || fallbackShape.fifth || root
+  };
+};
+
+/**
+ * Builds C-shape 1-3-5-1 geometry with same root/third as E-shape.
+ * Fifth is placed at fixed C-shape fretspace offset (x-3, y+2) from root.
+ */
+Fretscape.prototype._getCshape1351ForDegreeToken = function (degreeToken, fallbackShape) {
+  var eshape = this._getEshape513ForDegreeToken(degreeToken, fallbackShape);
+  if (!eshape || !eshape.root) return fallbackShape;
+  var cshapeFifth = this._fretspaceDeltaToWorldFromRoot(eshape.root, -3, 2);
+  return {
+    root: eshape.root,
+    third: eshape.third || eshape.root,
+    fifth: cshapeFifth || eshape.fifth || eshape.root
+  };
+};
+
+/**
+ * Returns normalized bass-run spec for active mode.
+ */
+Fretscape.prototype._getBassRunSpec = function () {
+  var specs = {
+    "root": {
+      sequence: ["root", "root", "root", "root"],
+      shapeStrategy: "default",
+      guideSequence: []
+    },
+    "root5th": {
+      sequence: ["root", "fifth", "root", "fifth"],
+      shapeStrategy: "default",
+      guideSequence: ["root", "fifth"]
+    },
+    "arpeggio135": {
+      sequence: ["root", "third", "fifth", "root"],
+      shapeStrategy: "default",
+      guideSequence: ["root", "third", "fifth"]
+    },
+    "eshape513": {
+      sequence: ["root", "third", "fifth", "root"],
+      shapeStrategy: "eshape513",
+      guideSequence: ["root", "third", "fifth"]
+    },
+    "cshape1351": {
+      sequence: ["root", "third", "fifth", "root"],
+      shapeStrategy: "cshape1351",
+      guideSequence: ["root", "third", "fifth", "root"]
+    }
+  };
+  var mode = this._progressionPlaybackMode || "root";
+  return specs.hasOwnProperty(mode) ? specs[mode] : specs.root;
+};
+
+/**
+ * Returns chord shape for bass-run playback using current mode strategy.
+ */
+Fretscape.prototype._getBassRunShapeForChordIndex = function (rootEntries, chordIndex, spec) {
+  if (!rootEntries || !rootEntries.length) return null;
+  var normalized = ((chordIndex % rootEntries.length) + rootEntries.length) % rootEntries.length;
+  var chordEntry = rootEntries[normalized];
+  var shape = this._getChordShapeForRootIndex(rootEntries, normalized);
+  if (!shape) return null;
+  if (spec && spec.shapeStrategy === "eshape513") {
+    shape = this._getEshape513ForDegreeToken(chordEntry && chordEntry.degreeToken, shape);
+  } else if (spec && spec.shapeStrategy === "cshape1351") {
+    shape = this._getCshape1351ForDegreeToken(chordEntry && chordEntry.degreeToken, shape);
+  }
+  return shape;
+};
+
+/**
+ * Resolves a bass-run token ("root","third","fifth","rest") to a shape cell.
+ */
+Fretscape.prototype._resolveBassRunTokenCell = function (shape, token) {
+  if (!shape || token === "rest") return null;
+  if (token === "third") return shape.third || shape.root || null;
+  if (token === "fifth") return shape.fifth || shape.root || null;
+  return shape.root || null;
+};
+
+/**
+ * Returns travel anchor for rest beats so animation can move toward next chord root.
+ */
+Fretscape.prototype._getBassRunRestAnchor = function (rootEntries, chordIndex, spec) {
+  var nextShape = this._getBassRunShapeForChordIndex(rootEntries, chordIndex + 1, spec);
+  return nextShape && nextShape.root ? nextShape.root : null;
+};
+
+/**
+ * Returns playback beat frame (tones + travel anchor + chord shape).
+ */
+Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootEntries) {
+  if (!rootEntries || !rootEntries.length) return null;
+  var spec = this._getBassRunSpec();
+  var chordIndex = Math.floor(beatIndex / this._progressionBeatsPerChord);
+  var beatInChord = beatIndex % this._progressionBeatsPerChord;
+  var shape = this._getBassRunShapeForChordIndex(rootEntries, chordIndex, spec);
+  if (!shape) return null;
+  var token = spec.sequence[beatInChord % spec.sequence.length];
+  var tokenCell = this._resolveBassRunTokenCell(shape, token);
+  var noteCells = [];
+  if (this._activeRiffBeats && this._activeRiffBeats.length === 4) {
+    var riffBeat = this._activeRiffBeats[beatInChord % 4];
+    if (riffBeat && riffBeat.length) {
+      for (var r = 0; r < riffBeat.length; r++) {
+        var point = this._fretspaceDeltaToWorldFromRoot(shape.root, riffBeat[r].x, riffBeat[r].y);
+        if (point) noteCells.push(point);
+      }
+    }
+  }
+  if (!noteCells.length && tokenCell) {
+    noteCells.push(tokenCell);
+  }
+  var anchorCell = noteCells.length ? noteCells[0] : tokenCell;
+  if (!anchorCell && token === "rest") {
+    anchorCell = this._getBassRunRestAnchor(rootEntries, chordIndex, spec);
+  }
+  return {
+    noteCell: noteCells.length ? noteCells[0] : tokenCell,
+    noteCells: noteCells,
+    anchorCell: anchorCell,
+    shape: shape
+  };
+};
+
+/**
+ * Returns interpolated cell coordinate between two cells for normalized t in [0,1].
+ */
+Fretscape.prototype._interpolateCell = function (startCell, endCell, t) {
+  if (!startCell || !endCell) return null;
+  var clamped = Math.max(0, Math.min(1, t));
+  return {
+    xCw: startCell.xCw + (endCell.xCw - startCell.xCw) * clamped,
+    yCw: startCell.yCw + (endCell.yCw - startCell.yCw) * clamped
+  };
+};
+
+/**
+ * Sets bass playback mode. Supported: "root", "root5th", "arpeggio135", "eshape513", "cshape1351".
+ */
+Fretscape.prototype.setProgressionPlaybackMode = function (mode) {
+  var normalized = "root";
+  if (mode === "root5th") normalized = "root5th";
+  if (mode === "arpeggio135") normalized = "arpeggio135";
+  if (mode === "eshape513") normalized = "eshape513";
+  if (mode === "cshape1351") normalized = "cshape1351";
+  if (this._progressionPlaybackMode === normalized) return;
+  this._progressionPlaybackMode = normalized;
+  if (this._isProgressionPlaying) {
+    this.stopProgressionPlayback();
+    return;
+  }
+  this.render();
+};
+
+/**
+ * Returns true when a selected progression maps to at least one root point.
+ */
+Fretscape.prototype.hasProgressionPath = function () {
+  return this._getActiveProgressionRootCells().length > 0;
+};
+
+/**
+ * Returns true when progression playback transport is active.
+ */
+Fretscape.prototype.isProgressionPlaybackActive = function () {
+  return !!this._isProgressionPlaying;
+};
+
+/**
+ * Returns one quarter-note duration in milliseconds for progression playback.
+ */
+Fretscape.prototype._getProgressionBeatMs = function () {
+  return 60000 / this._progressionBpm;
+};
+
+/**
+ * Sets progression playback tempo in BPM (clamped to 60..200).
+ */
+Fretscape.prototype.setProgressionBpm = function (bpm) {
+  var next = parseInt(bpm, 10);
+  if (!next || next < 60) next = 60;
+  if (next > 200) next = 200;
+  this._progressionBpm = next;
+  if (this._isProgressionPlaying) {
+    this._restartProgressionBeatTimer();
+  }
+};
+
+/**
+ * Restarts beat interval using current BPM while preserving beat index.
+ */
+Fretscape.prototype._restartProgressionBeatTimer = function () {
+  if (this._progressionBeatTimer !== null) {
+    window.clearInterval(this._progressionBeatTimer);
+    this._progressionBeatTimer = null;
+  }
+  if (!this._isProgressionPlaying) return;
+  var self = this;
+  this._progressionBeatTimer = window.setInterval(function () {
+    self._playProgressionBeat();
+  }, this._getProgressionBeatMs());
+};
+
+/**
+ * Notifies app-level playback subscribers after transport state changes.
+ */
+Fretscape.prototype._notifyProgressionPlaybackStateChange = function () {
+  if (typeof this.onProgressionPlaybackStateChange === "function") {
+    this.onProgressionPlaybackStateChange();
+  }
+};
+
+/**
+ * Draws a thin green guide line under root notes for the active progression on brick #1.
+ */
+Fretscape.prototype._drawProgressionRootGuide = function () {
+  var cells = this._getActiveProgressionRootCells();
+  if (cells.length < 2) return;
+  var underlineOffsetPx = this.cellWidth * 0.22;
+  this.ctx.save();
+  this.ctx.beginPath();
+  this.ctx.strokeStyle = "#2ea043";
+  this.ctx.lineWidth = Math.max(1, this.cellWidth * 0.015);
+  this.ctx.lineCap = "round";
+  this.ctx.lineJoin = "round";
+  this.ctx.moveTo(this._xCwToPx(cells[0].xCw), this._yCwToPx(cells[0].yCw) + underlineOffsetPx);
+  for (var i = 1; i < cells.length; i++) {
+    this.ctx.lineTo(this._xCwToPx(cells[i].xCw), this._yCwToPx(cells[i].yCw) + underlineOffsetPx);
+  }
+  this.ctx.stroke();
+  this.ctx.restore();
+};
+
+/**
+ * Draws yellow playback guide for current bass-run mode sequence.
+ */
+Fretscape.prototype._drawProgressionRootToFifthGuide = function () {
+  var spec = this._getBassRunSpec();
+  var guide = spec && spec.guideSequence ? spec.guideSequence : [];
+  if (guide.length < 2) return;
+  if (!this._progressionGuidePairFrom || !this._progressionGuidePairTo) return;
+  var t = Math.max(0, Math.min(1, this._progressionPulseProgress || 0));
+  var resolveGuidePoint = function (token) {
+    var fromCell = this._progressionGuidePairFrom[token];
+    var toCell = this._progressionGuidePairTo[token];
+    return this._interpolateCell(fromCell, toCell, t);
+  }.bind(this);
+  var startPoint = resolveGuidePoint(guide[0]);
+  if (!startPoint) return;
+  this.ctx.save();
+  this.ctx.beginPath();
+  this.ctx.moveTo(this._xCwToPx(startPoint.xCw), this._yCwToPx(startPoint.yCw));
+  for (var i = 1; i < guide.length; i++) {
+    var point = resolveGuidePoint(guide[i]);
+    if (!point) continue;
+    this.ctx.lineTo(this._xCwToPx(point.xCw), this._yCwToPx(point.yCw));
+  }
+  this.ctx.strokeStyle = "#f1c40f";
+  this.ctx.lineWidth = Math.max(1, this.cellWidth * 0.015);
+  this.ctx.lineCap = "round";
+  this.ctx.lineJoin = "round";
+  this.ctx.stroke();
+  this.ctx.restore();
+};
+
+/**
+ * Draws the moving green playback dot with pulsing radius.
+ */
+Fretscape.prototype._drawProgressionPulseIndicator = function () {
+  if (!this._progressionPulseFromCells || !this._progressionPulseFromCells.length) return;
+  if (!this._progressionPulseToCells || !this._progressionPulseToCells.length) return;
+  var moveT = Math.max(0, Math.min(1, this._progressionPulseProgress || 0));
+  var dotCount = Math.max(this._progressionPulseFromCells.length, this._progressionPulseToCells.length);
+  if (!dotCount) return;
+  var noteRadius = this.cellWidth * 0.4;
+  /* Peak on the beat, smallest halfway between beats. */
+  var minScale = 0.01;
+  var beatOscillation = 0.5 + 0.5 * Math.cos(moveT * Math.PI * 2);
+  var pulseScale = minScale + (1 - minScale) * beatOscillation;
+  var pulseRadius = noteRadius * pulseScale;
+  for (var i = 0; i < dotCount; i++) {
+    var fromCell = this._progressionPulseFromCells[Math.min(i, this._progressionPulseFromCells.length - 1)];
+    var toCell = this._progressionPulseToCells[Math.min(i, this._progressionPulseToCells.length - 1)];
+    var pulseCell = this._interpolateCell(fromCell, toCell, moveT);
+    if (!pulseCell) continue;
+    var centerX = this._xCwToPx(pulseCell.xCw);
+    var centerY = this._yCwToPx(pulseCell.yCw);
+    this.ctx.save();
+    this.ctx.beginPath();
+    this.ctx.arc(centerX, centerY, pulseRadius, 0, Math.PI * 2);
+    this.ctx.fillStyle = "#2ea043";
+    this.ctx.fill();
+    this.ctx.strokeStyle = "#1f7a34";
+    this.ctx.lineWidth = Math.max(1, this.cellWidth * 0.01);
+    this.ctx.stroke();
+    this.ctx.restore();
+  }
+};
+
+/**
+ * Starts pulse animation frames for beat-synced motion and pulsing.
+ */
+Fretscape.prototype._startProgressionPulseLoop = function () {
+  if (this._progressionAnimationFrame !== null) return;
+  var self = this;
+  var tick = function () {
+    if (!self._isProgressionPlaying ||
+        !self._progressionPulseFromCells || !self._progressionPulseFromCells.length ||
+        !self._progressionPulseToCells || !self._progressionPulseToCells.length) {
+      self._progressionAnimationFrame = null;
+      self.render();
+      return;
+    }
+    var now = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+    var beatMs = self._getProgressionBeatMs();
+    self._progressionPulseProgress = Math.max(0, Math.min(1, (now - self._progressionPulseStartMs) / beatMs));
+    self.render();
+    self._progressionAnimationFrame = window.requestAnimationFrame(tick);
+  };
+  this._progressionAnimationFrame = window.requestAnimationFrame(tick);
+};
+
+/**
+ * Stops the pulse animation frame loop when playback transport is off.
+ */
+Fretscape.prototype._stopProgressionPulseLoop = function () {
+  if (this._progressionAnimationFrame === null) return;
+  window.cancelAnimationFrame(this._progressionAnimationFrame);
+  this._progressionAnimationFrame = null;
+};
+
+/**
+ * Plays one beat of the active progression root path and resets pulse animation.
+ */
+Fretscape.prototype._playProgressionBeat = function () {
+  var rootEntries = this._getActiveProgressionRootEntries();
+  if (!rootEntries.length) {
+    this.stopProgressionPlayback();
+    return;
+  }
+  var currentPlan = this._getProgressionBeatPlan(this._progressionBeatIndex, rootEntries);
+  var nextPlan = this._getProgressionBeatPlan(this._progressionBeatIndex + 1, rootEntries);
+  if (!currentPlan || !currentPlan.shape) {
+    this.stopProgressionPlayback();
+    return;
+  }
+  var currentNotes = currentPlan.noteCells && currentPlan.noteCells.length ? currentPlan.noteCells.slice() : [];
+  var nextNotes = (nextPlan && nextPlan.noteCells && nextPlan.noteCells.length) ? nextPlan.noteCells.slice() : [];
+  var currentAnchor = currentPlan.anchorCell || (currentNotes.length ? currentNotes[0] : null);
+  var nextAnchor = (nextPlan && nextPlan.anchorCell) || (nextNotes.length ? nextNotes[0] : currentAnchor);
+  var nextShape = nextPlan && nextPlan.shape ? nextPlan.shape : currentPlan.shape;
+  this._playDrumBeat(this._progressionBeatIndex % 4);
+  for (var n = 0; n < currentNotes.length; n++) {
+    this._playDotTone(currentNotes[n].xCw, currentNotes[n].yCw);
+  }
+  if (currentAnchor) {
+    this._progressionPulseFromCell = { xCw: currentAnchor.xCw, yCw: currentAnchor.yCw };
+    this._progressionPulseToCell = nextAnchor
+      ? { xCw: nextAnchor.xCw, yCw: nextAnchor.yCw }
+      : { xCw: currentAnchor.xCw, yCw: currentAnchor.yCw };
+    this._progressionPulseFromCells = [];
+    this._progressionPulseToCells = [];
+    if (currentNotes.length) {
+      for (var i = 0; i < currentNotes.length; i++) {
+        this._progressionPulseFromCells.push({ xCw: currentNotes[i].xCw, yCw: currentNotes[i].yCw });
+      }
+    } else {
+      this._progressionPulseFromCells.push({ xCw: currentAnchor.xCw, yCw: currentAnchor.yCw });
+    }
+    if (nextNotes.length) {
+      for (var j = 0; j < nextNotes.length; j++) {
+        this._progressionPulseToCells.push({ xCw: nextNotes[j].xCw, yCw: nextNotes[j].yCw });
+      }
+    } else if (nextAnchor) {
+      this._progressionPulseToCells.push({ xCw: nextAnchor.xCw, yCw: nextAnchor.yCw });
+    } else {
+      this._progressionPulseToCells.push({ xCw: currentAnchor.xCw, yCw: currentAnchor.yCw });
+    }
+  } else {
+    this._clearProgressionPulse();
+  }
+  this._progressionGuidePairFrom = {
+    root: { xCw: currentPlan.shape.root.xCw, yCw: currentPlan.shape.root.yCw },
+    third: { xCw: currentPlan.shape.third.xCw, yCw: currentPlan.shape.third.yCw },
+    fifth: { xCw: currentPlan.shape.fifth.xCw, yCw: currentPlan.shape.fifth.yCw }
+  };
+  this._progressionGuidePairTo = {
+    root: { xCw: nextShape.root.xCw, yCw: nextShape.root.yCw },
+    third: { xCw: nextShape.third.xCw, yCw: nextShape.third.yCw },
+    fifth: { xCw: nextShape.fifth.xCw, yCw: nextShape.fifth.yCw }
+  };
+  this._progressionPulseProgress = 0;
+  this._progressionPulseStartMs = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+  this._progressionBeatIndex++;
+  this._startProgressionPulseLoop();
+  this.render();
+};
+
+/**
+ * Starts progression playback at 100 BPM, quarter-note pulses, 4 beats per chord root.
+ */
+Fretscape.prototype.startProgressionPlayback = function () {
+  if (this._isProgressionPlaying) return true;
+  if (!this.hasProgressionPath()) return false;
+  this._isProgressionPlaying = true;
+  this._progressionBeatIndex = 0;
+  if (this._drumEngine && typeof this._drumEngine.reset === "function") {
+    this._drumEngine.reset();
+  }
+  this._playProgressionBeat();
+  this._restartProgressionBeatTimer();
+  this._notifyProgressionPlaybackStateChange();
+  return true;
+};
+
+/**
+ * Stops progression playback and clears active beat pulse.
+ */
+Fretscape.prototype.stopProgressionPlayback = function () {
+  var wasPlaying = this._isProgressionPlaying;
+  if (this._progressionBeatTimer !== null) {
+    window.clearInterval(this._progressionBeatTimer);
+    this._progressionBeatTimer = null;
+  }
+  if (this._drumEngine && typeof this._drumEngine.stop === "function") {
+    this._drumEngine.stop();
+  }
+  this._isProgressionPlaying = false;
+  this._progressionBeatIndex = 0;
+  this._clearProgressionPulse();
+  this._progressionGuidePairFrom = null;
+  this._progressionGuidePairTo = null;
+  this._stopProgressionPulseLoop();
+  if (wasPlaying) {
+    this._notifyProgressionPlaybackStateChange();
+  }
+  this.render();
+};
+
+/**
+ * Updates active progression state without adding extra bricks to the map.
  */
 Fretscape.prototype.applyChordProgression = function (progression) {
-  var layout = this._buildProgressionLayout(progression);
-  this.clearBricks();
-  for (var i = 0; i < layout.length; i++) {
-    this.addBrick(new Brick(), layout[i].x, layout[i].y);
+  this._activeProgressionDegrees = (progression && progression.degrees && progression.degrees.length)
+    ? progression.degrees.slice()
+    : null;
+  if (this._isProgressionPlaying && !this.hasProgressionPath()) {
+    this.stopProgressionPlayback();
+    return;
+  }
+  if (!this.bricks.length) {
+    var topLeft = this._getDefaultBrickTopLeft();
+    this.addBrick(new Brick(), topLeft.x, topLeft.y);
+  }
+  if (!this._isProgressionPlaying) {
+    this._clearProgressionPulse();
+    this._progressionGuidePairFrom = null;
+    this._progressionGuidePairTo = null;
   }
   this.render();
 };
@@ -932,5 +1666,8 @@ Fretscape.prototype.render = function () {
     var stepY = this._isVerticallyMirrored ? -this.cellWidth : this.cellWidth;
     item.brick.render(this.ctx, this._xCwToPx(item.xCw), this._yCwToPx(item.yCw), stepX, stepY);
   }
+  this._drawProgressionRootGuide();
+  this._drawProgressionRootToFifthGuide();
+  this._drawProgressionPulseIndicator();
   this.ctx.setTransform(1, 0, 0, 1, 0, 0);
 };

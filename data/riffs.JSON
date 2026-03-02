@@ -1,0 +1,14 @@
+{
+  "riffs": [
+      {
+        "id":"1,5 double stop, hammer 6 2",
+        "name":"1,5 double stop, hammer 6 2",
+        "notes":"(0,0002),(-1,0200)"
+      },
+      {
+        "id": "empty",
+        "name": "empty",
+        "tab":"(0,----)"
+      }
+      ]
+}
