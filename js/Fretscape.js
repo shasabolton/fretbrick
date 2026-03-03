@@ -1453,7 +1453,7 @@ Fretscape.prototype._getDotFrequencyHz = function (dotX, dotY) {
 };
 
 /**
- * Starts a sustained pressed-note voice that decays over one second while held.
+ * Starts a pressed-note voice that fades from press and ends within one second.
  */
 Fretscape.prototype._startPressedNote = function (dotX, dotY, pointerId) {
   var ctx = this._getAudioContext();
@@ -1469,6 +1469,7 @@ Fretscape.prototype._startPressedNote = function (dotX, dotY, pointerId) {
   var toneFilter = ctx.createBiquadFilter();
   var bodyFilter = ctx.createBiquadFilter();
   var gain = ctx.createGain();
+  var self = this;
   if (wave && osc.setPeriodicWave) {
     osc.setPeriodicWave(wave);
   } else {
@@ -1486,18 +1487,26 @@ Fretscape.prototype._startPressedNote = function (dotX, dotY, pointerId) {
   bodyFilter.gain.value = 4;
   gain.gain.setValueAtTime(0.0001, now);
   gain.gain.exponentialRampToValueAtTime(0.24, now + 0.004);
-  gain.gain.exponentialRampToValueAtTime(0.12, now + 1);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 1);
   osc.connect(toneFilter);
   toneFilter.connect(bodyFilter);
   bodyFilter.connect(gain);
   gain.connect(ctx.destination);
-  osc.start(now);
-  this._pressedNoteVoice = {
+  var voice = {
     osc: osc,
     gain: gain,
     yCw: dotY,
     xCw: dotX
   };
+  osc.onended = function () {
+    if (self._pressedNoteVoice === voice) {
+      self._pressedNoteVoice = null;
+      self._pressedNotePointerId = null;
+    }
+  };
+  osc.start(now);
+  osc.stop(now + 1.06);
+  this._pressedNoteVoice = voice;
   this._pressedNotePointerId = (pointerId === undefined || pointerId === null) ? null : pointerId;
   return true;
 };
@@ -1536,12 +1545,16 @@ Fretscape.prototype._releasePressedNote = function (fadeSec) {
   var now = ctx.currentTime;
   var releaseSec = (typeof fadeSec === "number") ? Math.max(0.01, fadeSec) : 0.1;
   var gainNode = voice.gain.gain;
-  var current = Math.max(0.0001, gainNode.value || 0.0001);
-  gainNode.cancelScheduledValues(now);
-  gainNode.setValueAtTime(current, now);
+  if (typeof gainNode.cancelAndHoldAtTime === "function") {
+    gainNode.cancelAndHoldAtTime(now);
+  } else {
+    var current = Math.max(0.0001, gainNode.value || 0.0001);
+    gainNode.cancelScheduledValues(now);
+    gainNode.setValueAtTime(current, now);
+  }
   gainNode.exponentialRampToValueAtTime(0.0001, now + releaseSec);
   try {
-    voice.osc.stop(now + releaseSec + 0.04);
+    voice.osc.stop(now + releaseSec + 0.05);
   } catch (e) {
     /* Ignore stop errors if voice has already been stopped. */
   }
