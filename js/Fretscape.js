@@ -38,6 +38,8 @@ function Fretscape(containerEl) {
   this._slapNoiseBuffer = null;
   this._pressedNoteVoice = null;
   this._pressedNotePointerId = null;
+  this._touchPressedStates = {};
+  this._isTwoFingerPanZoomEnabled = true;
   this._activeProgressionDegrees = null;
   this._progressionPlaybackMode = "root";
   this._isProgressionPlaying = false;
@@ -87,6 +89,19 @@ Fretscape.prototype.clearBricks = function () {
  */
 Fretscape.prototype.setDragConstraintSlope = function (useFiveByOneSlope) {
   this._dragConstraintVector = useFiveByOneSlope ? { x: 5, y: 1 } : { x: 2, y: -2 };
+};
+
+/**
+ * Enables/disables two-finger touch pan/zoom gesture mode.
+ * When disabled, touch gestures are used for multi-finger note input.
+ */
+Fretscape.prototype.setTwoFingerPanZoomEnabled = function (isEnabled) {
+  this._isTwoFingerPanZoomEnabled = !!isEnabled;
+  if (!this._isTwoFingerPanZoomEnabled) {
+    this._touchGesture = null;
+    return;
+  }
+  this._releaseAllTouchPressedNotes(0.03);
 };
 
 /**
@@ -1453,23 +1468,22 @@ Fretscape.prototype._getDotFrequencyHz = function (dotX, dotY) {
 };
 
 /**
- * Starts a pressed-note voice that fades from press and ends within one second.
+ * Creates a pressed-note voice that fades from press and ends within one second.
  */
-Fretscape.prototype._startPressedNote = function (dotX, dotY, pointerId) {
+Fretscape.prototype._createPressedNoteVoice = function (dotX, dotY, onEnded) {
   var ctx = this._getAudioContext();
-  if (!ctx) return false;
+  if (!ctx) return null;
   if (ctx.state === "suspended" && ctx.resume) {
     ctx.resume();
   }
-  this._releasePressedNote(0.02);
+  var snappedX = Math.round(dotX);
   var now = ctx.currentTime;
-  var frequency = this._getDotFrequencyHz(dotX, dotY);
+  var frequency = this._getDotFrequencyHz(snappedX, dotY);
   var osc = ctx.createOscillator();
   var wave = this._getGuitarPeriodicWave(ctx);
   var toneFilter = ctx.createBiquadFilter();
   var bodyFilter = ctx.createBiquadFilter();
   var gain = ctx.createGain();
-  var self = this;
   if (wave && osc.setPeriodicWave) {
     osc.setPeriodicWave(wave);
   } else {
@@ -1492,58 +1506,40 @@ Fretscape.prototype._startPressedNote = function (dotX, dotY, pointerId) {
   toneFilter.connect(bodyFilter);
   bodyFilter.connect(gain);
   gain.connect(ctx.destination);
-  var voice = {
-    osc: osc,
-    gain: gain,
-    yCw: dotY,
-    xCw: dotX
-  };
-  osc.onended = function () {
-    if (self._pressedNoteVoice === voice) {
-      self._pressedNoteVoice = null;
-      self._pressedNotePointerId = null;
-    }
-  };
+  var voice = { osc: osc, gain: gain, yCw: dotY, xCw: snappedX };
+  if (typeof onEnded === "function") {
+    osc.onended = onEnded;
+  }
   osc.start(now);
   osc.stop(now + 1.06);
-  this._pressedNoteVoice = voice;
-  this._pressedNotePointerId = (pointerId === undefined || pointerId === null) ? null : pointerId;
-  return true;
+  return voice;
 };
 
 /**
- * Slides an active pressed-note voice horizontally; y remains locked to pressed row.
+ * Slides a pressed-note voice horizontally; y remains locked to voice row.
  */
-Fretscape.prototype._slidePressedNoteToX = function (dotX) {
-  if (!this._pressedNoteVoice || !this._pressedNoteVoice.osc) return;
+Fretscape.prototype._slideNoteVoiceToX = function (voice, dotX) {
+  if (!voice || !voice.osc) return;
   if (typeof dotX !== "number") return;
   var snappedX = Math.round(dotX); /* Snap slide to nearest horizontal fret. */
-  if (this._pressedNoteVoice.xCw === snappedX) return;
-  var yCw = this._pressedNoteVoice.yCw;
-  var frequency = this._getDotFrequencyHz(snappedX, yCw);
+  if (voice.xCw === snappedX) return;
+  var frequency = this._getDotFrequencyHz(snappedX, voice.yCw);
   var ctx = this._getAudioContext();
   if (!ctx) return;
   var now = ctx.currentTime;
-  var osc = this._pressedNoteVoice.osc;
-  osc.frequency.cancelScheduledValues(now);
-  osc.frequency.setValueAtTime(Math.max(20, osc.frequency.value || frequency), now);
-  osc.frequency.exponentialRampToValueAtTime(frequency, now + 0.03);
-  this._pressedNoteVoice.xCw = snappedX;
+  voice.osc.frequency.cancelScheduledValues(now);
+  voice.osc.frequency.setValueAtTime(Math.max(20, voice.osc.frequency.value || frequency), now);
+  voice.osc.frequency.exponentialRampToValueAtTime(frequency, now + 0.03);
+  voice.xCw = snappedX;
 };
 
 /**
- * Releases active pressed-note voice using the requested fade-out duration.
+ * Releases any pressed-note voice using the requested fade-out duration.
  */
-Fretscape.prototype._releasePressedNote = function (fadeSec) {
-  if (!this._pressedNoteVoice) {
-    this._pressedNotePointerId = null;
-    return;
-  }
+Fretscape.prototype._releaseNoteVoice = function (voice, fadeSec) {
+  if (!voice || !voice.gain || !voice.osc) return;
   var ctx = this._getAudioContext();
-  var voice = this._pressedNoteVoice;
-  this._pressedNoteVoice = null;
-  this._pressedNotePointerId = null;
-  if (!ctx || !voice.gain || !voice.osc) return;
+  if (!ctx) return;
   var now = ctx.currentTime;
   var releaseSec = (typeof fadeSec === "number") ? Math.max(0.01, fadeSec) : 0.1;
   var gainNode = voice.gain.gain;
@@ -1560,6 +1556,60 @@ Fretscape.prototype._releasePressedNote = function (fadeSec) {
   } catch (e) {
     /* Ignore stop errors if voice has already been stopped. */
   }
+};
+
+/**
+ * Starts single-pointer pressed note tracking (mouse or single touch).
+ */
+Fretscape.prototype._startPressedNote = function (dotX, dotY, pointerId) {
+  var self = this;
+  this._releasePressedNote(0.02);
+  var voice = this._createPressedNoteVoice(dotX, dotY, function () {
+    if (self._pressedNoteVoice === voice) {
+      self._pressedNoteVoice = null;
+      self._pressedNotePointerId = null;
+    }
+  });
+  if (!voice) return false;
+  this._pressedNoteVoice = voice;
+  this._pressedNotePointerId = (pointerId === undefined || pointerId === null) ? null : pointerId;
+  return true;
+};
+
+/**
+ * Slides the active single-pointer pressed note horizontally.
+ */
+Fretscape.prototype._slidePressedNoteToX = function (dotX) {
+  if (!this._pressedNoteVoice) return;
+  this._slideNoteVoiceToX(this._pressedNoteVoice, dotX);
+};
+
+/**
+ * Releases active single-pointer pressed note using the requested fade duration.
+ */
+Fretscape.prototype._releasePressedNote = function (fadeSec) {
+  if (!this._pressedNoteVoice) {
+    this._pressedNotePointerId = null;
+    return;
+  }
+  var voice = this._pressedNoteVoice;
+  this._pressedNoteVoice = null;
+  this._pressedNotePointerId = null;
+  this._releaseNoteVoice(voice, fadeSec);
+};
+
+/**
+ * Releases all active touch-note voices and clears touch note state.
+ */
+Fretscape.prototype._releaseAllTouchPressedNotes = function (fadeSec) {
+  for (var id in this._touchPressedStates) {
+    if (!this._touchPressedStates.hasOwnProperty(id)) continue;
+    var state = this._touchPressedStates[id];
+    if (state && state.voice) {
+      this._releaseNoteVoice(state.voice, fadeSec);
+    }
+  }
+  this._touchPressedStates = {};
 };
 
 /**
@@ -1657,6 +1707,100 @@ Fretscape.prototype._bindInput = function () {
     }
     return null;
   };
+  var syncTouchNoteStates = function (touches) {
+    if (self._isTwoFingerPanZoomEnabled) return false;
+    var touchList = touches || [];
+    var activeIds = {};
+    var candidates = [];
+    var t;
+    for (t = 0; t < touchList.length; t++) {
+      var touch = touchList[t];
+      var id = String(touch.identifier);
+      activeIds[id] = true;
+      var cw = self._pxToCw(touch.clientX, touch.clientY);
+      var state = self._touchPressedStates[id];
+      if (state && state.voice) {
+        candidates.push({
+          id: id,
+          row: state.voice.yCw,
+          slideX: cw.x,
+          frequency: self._getDotFrequencyHz(Math.round(cw.x), state.voice.yCw)
+        });
+        continue;
+      }
+      var dotHit = self._hitDot(cw.x, cw.y);
+      if (!dotHit) continue;
+      candidates.push({
+        id: id,
+        row: dotHit.yCw,
+        slideX: dotHit.xCw,
+        startX: dotHit.xCw,
+        startY: dotHit.yCw,
+        frequency: self._getDotFrequencyHz(dotHit.xCw, dotHit.yCw)
+      });
+    }
+    for (var existingId in self._touchPressedStates) {
+      if (!self._touchPressedStates.hasOwnProperty(existingId)) continue;
+      if (activeIds[existingId]) continue;
+      var endedState = self._touchPressedStates[existingId];
+      if (endedState && endedState.voice) {
+        self._releaseNoteVoice(endedState.voice, 0.1);
+      }
+      delete self._touchPressedStates[existingId];
+    }
+    var winnerByRow = {};
+    for (var c = 0; c < candidates.length; c++) {
+      var candidate = candidates[c];
+      var rowKey = String(candidate.row);
+      var winner = winnerByRow[rowKey];
+      if (!winner || candidate.frequency > winner.frequency) {
+        winnerByRow[rowKey] = candidate;
+      }
+    }
+    var winners = {};
+    for (var row in winnerByRow) {
+      if (!winnerByRow.hasOwnProperty(row)) continue;
+      winners[winnerByRow[row].id] = winnerByRow[row];
+    }
+    for (var activeId in self._touchPressedStates) {
+      if (!self._touchPressedStates.hasOwnProperty(activeId)) continue;
+      if (!activeIds[activeId]) continue;
+      if (winners[activeId]) continue;
+      var suppressedState = self._touchPressedStates[activeId];
+      if (suppressedState && suppressedState.voice) {
+        self._releaseNoteVoice(suppressedState.voice, 0.1);
+        suppressedState.voice = null;
+      }
+    }
+    for (var winnerId in winners) {
+      if (!winners.hasOwnProperty(winnerId)) continue;
+      var winnerData = winners[winnerId];
+      var winnerState = self._touchPressedStates[winnerId];
+      if (winnerState && winnerState.voice) {
+        self._slideNoteVoiceToX(winnerState.voice, winnerData.slideX);
+        continue;
+      }
+      var voice = self._createPressedNoteVoice(
+        (typeof winnerData.startX === "number") ? winnerData.startX : winnerData.slideX,
+        (typeof winnerData.startY === "number") ? winnerData.startY : winnerData.row
+      );
+      if (!winnerState) {
+        winnerState = { voice: null };
+        self._touchPressedStates[winnerId] = winnerState;
+      }
+      winnerState.voice = voice;
+      if (voice && voice.osc) {
+        (function (stateRef, voiceRef) {
+          voiceRef.osc.onended = function () {
+            if (stateRef.voice === voiceRef) {
+              stateRef.voice = null;
+            }
+          };
+        })(winnerState, voice);
+      }
+    }
+    return true;
+  };
   var startDragCopyFromIndex = function (idx, pointerCw, pointerClient) {
     if (idx < 0 || idx >= self.bricks.length) return;
     var item = self.bricks[idx];
@@ -1730,6 +1874,12 @@ Fretscape.prototype._bindInput = function () {
     }
     if (isTouch && e.touches && e.touches.length >= 2) {
       cancelPendingDragCopy();
+      if (!self._isTwoFingerPanZoomEnabled) {
+        syncTouchNoteStates(e.touches);
+        e.preventDefault();
+        return;
+      }
+      self._releaseAllTouchPressedNotes(0.03);
       self._releasePressedNote(0.03);
       if (self._dragItem) {
         finishDrag();
@@ -1740,6 +1890,12 @@ Fretscape.prototype._bindInput = function () {
     }
     if (!isTouch && e.button !== 0) return;
     if (isTouch && e.touches && e.touches.length !== 1) return;
+    if (isTouch && !self._isTwoFingerPanZoomEnabled) {
+      cancelPendingDragCopy();
+      syncTouchNoteStates(e.touches);
+      e.preventDefault();
+      return;
+    }
     var coords = self._getEventCoords(e);
     var cw = self._pxToCw(coords.x, coords.y);
     var dotHit = self._hitDot(cw.x, cw.y);
@@ -1779,6 +1935,11 @@ Fretscape.prototype._bindInput = function () {
         return;
       }
       self._touchGesture = null;
+    }
+    if (isTouch && !self._isTwoFingerPanZoomEnabled) {
+      syncTouchNoteStates(e.touches);
+      e.preventDefault();
+      return;
     }
     if (self._pressedNoteVoice) {
       if (isTouch) {
@@ -1839,6 +2000,11 @@ Fretscape.prototype._bindInput = function () {
       } else {
         self._beginTouchGesture(e.touches);
       }
+      e.preventDefault();
+      return;
+    }
+    if (isTouch && !self._isTwoFingerPanZoomEnabled) {
+      syncTouchNoteStates(e.touches || []);
       e.preventDefault();
       return;
     }

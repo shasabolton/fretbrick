@@ -14,6 +14,7 @@
   var progressionPlayToggle = document.getElementById("progression-play-toggle");
   var handednessToggle = document.getElementById("handedness-toggle");
   var verticalMirrorToggle = document.getElementById("vertical-mirror-toggle");
+  var panZoomToggle = document.getElementById("pan-zoom-toggle");
   var dragConstraintToggle = document.getElementById("drag-constraint-5x1");
   var fretscape = new Fretscape(canvasWrap);
   var drumEngine = new DrumEngine();
@@ -303,6 +304,14 @@
     });
   } else {
     fretscape.setVerticalMirrored(false);
+  }
+  if (panZoomToggle) {
+    fretscape.setTwoFingerPanZoomEnabled(!!panZoomToggle.checked);
+    panZoomToggle.addEventListener("change", function () {
+      fretscape.setTwoFingerPanZoomEnabled(!!panZoomToggle.checked);
+    });
+  } else {
+    fretscape.setTwoFingerPanZoomEnabled(true);
   }
   if (dragConstraintToggle) {
     fretscape.setDragConstraintSlope(!!dragConstraintToggle.checked);
