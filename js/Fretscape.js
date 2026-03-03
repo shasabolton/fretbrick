@@ -1302,11 +1302,12 @@ Fretscape.prototype._hitTest = function (xCw, yCw) {
 };
 
 /**
- * Returns dot hit info at (xCw, yCw), or null if not on a dot.
+ * Returns all dot hits at (xCw, yCw), sorted nearest-first.
  */
-Fretscape.prototype._hitDot = function (xCw, yCw) {
+Fretscape.prototype._hitDotsAtPoint = function (xCw, yCw) {
   var dotRadiusCw = 0.4; /* Keep in sync with Brick.render radius ratio. */
   var hitRadiusSq = dotRadiusCw * dotRadiusCw;
+  var hits = [];
   for (var i = this.bricks.length - 1; i >= 0; i--) {
     var item = this.bricks[i];
     var data = item.brick && item.brick.cellData ? item.brick.cellData : [];
@@ -1316,13 +1317,49 @@ Fretscape.prototype._hitDot = function (xCw, yCw) {
         var cy = item.yCw + r;
         var dx = xCw - cx;
         var dy = yCw - cy;
-        if (dx * dx + dy * dy <= hitRadiusSq) {
-          return { xCw: cx, yCw: cy, brickIndex: i, row: r, col: c };
+        var distSq = dx * dx + dy * dy;
+        if (distSq <= hitRadiusSq) {
+          hits.push({ xCw: cx, yCw: cy, brickIndex: i, row: r, col: c, distSq: distSq });
         }
       }
     }
   }
-  return null;
+  hits.sort(function (a, b) {
+    return a.distSq - b.distSq;
+  });
+  return hits;
+};
+
+/**
+ * Returns touch-note hit candidates for a point.
+ * Includes primary dot, plus adjacent-string dot(s) when overlapping both.
+ */
+Fretscape.prototype._getTouchChordHits = function (xCw, yCw) {
+  var hits = this._hitDotsAtPoint(xCw, yCw);
+  if (!hits.length) return [];
+  var primary = hits[0];
+  var selected = [primary];
+  for (var i = 1; i < hits.length; i++) {
+    var hit = hits[i];
+    if (Math.abs(hit.yCw - primary.yCw) !== 1) continue;
+    selected.push(hit);
+  }
+  return selected;
+};
+
+/**
+ * Returns first dot hit info at (xCw, yCw), or null if not on a dot.
+ */
+Fretscape.prototype._hitDot = function (xCw, yCw) {
+  var hits = this._hitDotsAtPoint(xCw, yCw);
+  if (!hits.length) return null;
+  return {
+    xCw: hits[0].xCw,
+    yCw: hits[0].yCw,
+    brickIndex: hits[0].brickIndex,
+    row: hits[0].row,
+    col: hits[0].col
+  };
 };
 
 /**
@@ -1605,8 +1642,10 @@ Fretscape.prototype._releaseAllTouchPressedNotes = function (fadeSec) {
   for (var id in this._touchPressedStates) {
     if (!this._touchPressedStates.hasOwnProperty(id)) continue;
     var state = this._touchPressedStates[id];
-    if (state && state.voice) {
-      this._releaseNoteVoice(state.voice, fadeSec);
+    if (!state || !state.rows) continue;
+    for (var rowKey in state.rows) {
+      if (!state.rows.hasOwnProperty(rowKey)) continue;
+      this._releaseNoteVoice(state.rows[rowKey], fadeSec);
     }
   }
   this._touchPressedStates = {};
@@ -1727,32 +1766,44 @@ Fretscape.prototype._bindInput = function () {
       activeIds[id] = true;
       var cw = self._pxToCw(touch.clientX, touch.clientY);
       var state = self._touchPressedStates[id];
-      if (state && state.voice) {
-        candidates.push({
-          id: id,
-          row: state.voice.yCw,
-          slideX: cw.x,
-          frequency: self._getDotFrequencyHz(Math.round(cw.x), state.voice.yCw)
-        });
+      var chordHits = self._getTouchChordHits(cw.x, cw.y);
+      if (chordHits.length) {
+        for (var h = 0; h < chordHits.length; h++) {
+          var hit = chordHits[h];
+          candidates.push({
+            id: id,
+            row: hit.yCw,
+            slideX: hit.xCw,
+            startX: hit.xCw,
+            startY: hit.yCw,
+            frequency: self._getDotFrequencyHz(hit.xCw, hit.yCw)
+          });
+        }
         continue;
       }
-      var dotHit = self._hitDot(cw.x, cw.y);
-      if (!dotHit) continue;
-      candidates.push({
-        id: id,
-        row: dotHit.yCw,
-        slideX: dotHit.xCw,
-        startX: dotHit.xCw,
-        startY: dotHit.yCw,
-        frequency: self._getDotFrequencyHz(dotHit.xCw, dotHit.yCw)
-      });
+      if (state && state.rows) {
+        for (var stateRowKey in state.rows) {
+          if (!state.rows.hasOwnProperty(stateRowKey)) continue;
+          var stateVoice = state.rows[stateRowKey];
+          if (!stateVoice) continue;
+          candidates.push({
+            id: id,
+            row: stateVoice.yCw,
+            slideX: cw.x,
+            frequency: self._getDotFrequencyHz(Math.round(cw.x), stateVoice.yCw)
+          });
+        }
+      }
     }
     for (var existingId in self._touchPressedStates) {
       if (!self._touchPressedStates.hasOwnProperty(existingId)) continue;
       if (activeIds[existingId]) continue;
       var endedState = self._touchPressedStates[existingId];
-      if (endedState && endedState.voice) {
-        self._releaseNoteVoice(endedState.voice, 0.1);
+      if (endedState && endedState.rows) {
+        for (var endedRowKey in endedState.rows) {
+          if (!endedState.rows.hasOwnProperty(endedRowKey)) continue;
+          self._releaseNoteVoice(endedState.rows[endedRowKey], 0.1);
+        }
       }
       delete self._touchPressedStates[existingId];
     }
@@ -1765,46 +1816,61 @@ Fretscape.prototype._bindInput = function () {
         winnerByRow[rowKey] = candidate;
       }
     }
-    var winners = {};
-    for (var row in winnerByRow) {
-      if (!winnerByRow.hasOwnProperty(row)) continue;
-      winners[winnerByRow[row].id] = winnerByRow[row];
+    var winnersByTouch = {};
+    for (var rowId in winnerByRow) {
+      if (!winnerByRow.hasOwnProperty(rowId)) continue;
+      var rowWinner = winnerByRow[rowId];
+      var winnerId = rowWinner.id;
+      if (!winnersByTouch[winnerId]) {
+        winnersByTouch[winnerId] = {};
+      }
+      winnersByTouch[winnerId][String(rowWinner.row)] = rowWinner;
     }
     for (var activeId in self._touchPressedStates) {
       if (!self._touchPressedStates.hasOwnProperty(activeId)) continue;
       if (!activeIds[activeId]) continue;
-      if (winners[activeId]) continue;
       var suppressedState = self._touchPressedStates[activeId];
-      if (suppressedState && suppressedState.voice) {
-        self._releaseNoteVoice(suppressedState.voice, 0.1);
-        suppressedState.voice = null;
+      if (!suppressedState) continue;
+      if (!suppressedState.rows) suppressedState.rows = {};
+      var touchWinners = winnersByTouch[activeId] || {};
+      for (var activeRowKey in suppressedState.rows) {
+        if (!suppressedState.rows.hasOwnProperty(activeRowKey)) continue;
+        if (touchWinners[activeRowKey]) continue;
+        self._releaseNoteVoice(suppressedState.rows[activeRowKey], 0.1);
+        delete suppressedState.rows[activeRowKey];
       }
     }
-    for (var winnerId in winners) {
-      if (!winners.hasOwnProperty(winnerId)) continue;
-      var winnerData = winners[winnerId];
-      var winnerState = self._touchPressedStates[winnerId];
-      if (winnerState && winnerState.voice) {
-        self._slideNoteVoiceToX(winnerState.voice, winnerData.slideX);
-        continue;
-      }
-      var voice = self._createPressedNoteVoice(
-        (typeof winnerData.startX === "number") ? winnerData.startX : winnerData.slideX,
-        (typeof winnerData.startY === "number") ? winnerData.startY : winnerData.row
-      );
+    for (var winnerTouchId in winnersByTouch) {
+      if (!winnersByTouch.hasOwnProperty(winnerTouchId)) continue;
+      var winnerRows = winnersByTouch[winnerTouchId];
+      var winnerState = self._touchPressedStates[winnerTouchId];
       if (!winnerState) {
-        winnerState = { voice: null };
-        self._touchPressedStates[winnerId] = winnerState;
+        winnerState = { rows: {} };
+        self._touchPressedStates[winnerTouchId] = winnerState;
       }
-      winnerState.voice = voice;
-      if (voice && voice.osc) {
-        (function (stateRef, voiceRef) {
-          voiceRef.osc.onended = function () {
-            if (stateRef.voice === voiceRef) {
-              stateRef.voice = null;
-            }
-          };
-        })(winnerState, voice);
+      if (!winnerState.rows) winnerState.rows = {};
+      for (var winnerRowKey in winnerRows) {
+        if (!winnerRows.hasOwnProperty(winnerRowKey)) continue;
+        var winnerData = winnerRows[winnerRowKey];
+        var existingVoice = winnerState.rows[winnerRowKey];
+        if (existingVoice) {
+          self._slideNoteVoiceToX(existingVoice, winnerData.slideX);
+          continue;
+        }
+        var voice = self._createPressedNoteVoice(
+          (typeof winnerData.startX === "number") ? winnerData.startX : winnerData.slideX,
+          (typeof winnerData.startY === "number") ? winnerData.startY : winnerData.row
+        );
+        winnerState.rows[winnerRowKey] = voice;
+        if (voice && voice.osc) {
+          (function (stateRef, rowKey, voiceRef) {
+            voiceRef.osc.onended = function () {
+              if (stateRef.rows && stateRef.rows[rowKey] === voiceRef) {
+                delete stateRef.rows[rowKey];
+              }
+            };
+          })(winnerState, winnerRowKey, voice);
+        }
       }
     }
     return true;
