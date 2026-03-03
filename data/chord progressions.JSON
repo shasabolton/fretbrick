@@ -2,32 +2,32 @@
   "progressions": [
     {
       "id": "tonic-drone",
-      "name": "Tonic Drone (I)",
+      "name": "Tonic I",
       "degrees": ["I"]
     },
     {
       "id": "classic-three-chord-cadence",
-      "name": "Classic Three-Chord Cadence (I-IV-V-I)",
+      "name": "I-IV-V-I",
       "degrees": ["I", "IV", "V","I"]
     },
     {
       "id": "sensitive-female-progression",
-      "name": "Sensitive Female Progression (vi-IV-I-V)",
+      "name": "vi-IV-I-V",
       "degrees": ["vi", "IV", "I", "V"]
     },
     {
       "id": "doo-wop-50s-progression",
-      "name": "50s Doo-Wop Progression (I-vi-IV-V)",
+      "name": "Doo-Wop I-vi-IV-V",
       "degrees": ["I", "vi", "IV", "V"]
     },
     {
       "id": "axis-pop-cadence",
-      "name": "Axis Pop Cadence (I-V-vi-IV)",
+      "name": "pop I-V-vi-IV",
       "degrees": ["I", "V", "vi", "IV"]
     },
     {
       "id": "rhythm-changes-turnaround",
-      "name": "Rhythm Changes Turnaround (I-vi-ii-V)",
+      "name": "Turnaround I-vi-ii-V",
       "degrees": ["I", "vi", "ii", "V"]
     }
   ]
