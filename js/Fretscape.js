@@ -1517,8 +1517,10 @@ Fretscape.prototype._startPressedNote = function (dotX, dotY, pointerId) {
 Fretscape.prototype._slidePressedNoteToX = function (dotX) {
   if (!this._pressedNoteVoice || !this._pressedNoteVoice.osc) return;
   if (typeof dotX !== "number") return;
+  var snappedX = Math.round(dotX); /* Snap slide to nearest horizontal fret. */
+  if (this._pressedNoteVoice.xCw === snappedX) return;
   var yCw = this._pressedNoteVoice.yCw;
-  var frequency = this._getDotFrequencyHz(dotX, yCw);
+  var frequency = this._getDotFrequencyHz(snappedX, yCw);
   var ctx = this._getAudioContext();
   if (!ctx) return;
   var now = ctx.currentTime;
@@ -1526,7 +1528,7 @@ Fretscape.prototype._slidePressedNoteToX = function (dotX) {
   osc.frequency.cancelScheduledValues(now);
   osc.frequency.setValueAtTime(Math.max(20, osc.frequency.value || frequency), now);
   osc.frequency.exponentialRampToValueAtTime(frequency, now + 0.03);
-  this._pressedNoteVoice.xCw = dotX;
+  this._pressedNoteVoice.xCw = snappedX;
 };
 
 /**
