@@ -36,6 +36,8 @@ function Fretscape(containerEl) {
   this._audioCtxUnavailable = false;
   this._guitarWave = null;
   this._slapNoiseBuffer = null;
+  this._pressedNoteVoice = null;
+  this._pressedNotePointerId = null;
   this._activeProgressionDegrees = null;
   this._progressionPlaybackMode = "root";
   this._isProgressionPlaying = false;
@@ -1438,17 +1440,119 @@ Fretscape.prototype._playSlapTone = function (options) {
 };
 
 /**
- * Plays a plucked tone from semitone offset where left=+1 and down=+5 from (0,0).
+ * Converts a world-space dot coordinate into frequency in Hz.
  */
-Fretscape.prototype._playDotTone = function (dotX, dotY, options) {
-  var opts = options || {};
+Fretscape.prototype._getDotFrequencyHz = function (dotX, dotY) {
   var coord = this._dotToDisplayCoord(dotX, dotY);
   var semitoneOffset = coord.x + 5 * coord.y;
   var rootFromLowE = this._getKeySemitoneFromLowE();
   var semitoneFromLowE = rootFromLowE + semitoneOffset;
   var lowEFrequencyHz = 82.4068892282175; /* E2, standard guitar low E. */
   var frequency = lowEFrequencyHz * Math.pow(2, semitoneFromLowE / 12);
-  frequency = Math.max(20, Math.min(20000, frequency));
+  return Math.max(20, Math.min(20000, frequency));
+};
+
+/**
+ * Starts a sustained pressed-note voice that decays over one second while held.
+ */
+Fretscape.prototype._startPressedNote = function (dotX, dotY, pointerId) {
+  var ctx = this._getAudioContext();
+  if (!ctx) return false;
+  if (ctx.state === "suspended" && ctx.resume) {
+    ctx.resume();
+  }
+  this._releasePressedNote(0.02);
+  var now = ctx.currentTime;
+  var frequency = this._getDotFrequencyHz(dotX, dotY);
+  var osc = ctx.createOscillator();
+  var wave = this._getGuitarPeriodicWave(ctx);
+  var toneFilter = ctx.createBiquadFilter();
+  var bodyFilter = ctx.createBiquadFilter();
+  var gain = ctx.createGain();
+  if (wave && osc.setPeriodicWave) {
+    osc.setPeriodicWave(wave);
+  } else {
+    osc.type = "triangle";
+  }
+  osc.frequency.setValueAtTime(frequency * 1.006, now);
+  osc.frequency.exponentialRampToValueAtTime(frequency, now + 0.03);
+  toneFilter.type = "lowpass";
+  toneFilter.frequency.setValueAtTime(2600, now);
+  toneFilter.frequency.exponentialRampToValueAtTime(1100, now + 1);
+  toneFilter.Q.value = 1.2;
+  bodyFilter.type = "peaking";
+  bodyFilter.frequency.value = 190;
+  bodyFilter.Q.value = 0.9;
+  bodyFilter.gain.value = 4;
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.24, now + 0.004);
+  gain.gain.exponentialRampToValueAtTime(0.12, now + 1);
+  osc.connect(toneFilter);
+  toneFilter.connect(bodyFilter);
+  bodyFilter.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(now);
+  this._pressedNoteVoice = {
+    osc: osc,
+    gain: gain,
+    yCw: dotY,
+    xCw: dotX
+  };
+  this._pressedNotePointerId = (pointerId === undefined || pointerId === null) ? null : pointerId;
+  return true;
+};
+
+/**
+ * Slides an active pressed-note voice horizontally; y remains locked to pressed row.
+ */
+Fretscape.prototype._slidePressedNoteToX = function (dotX) {
+  if (!this._pressedNoteVoice || !this._pressedNoteVoice.osc) return;
+  if (typeof dotX !== "number") return;
+  var yCw = this._pressedNoteVoice.yCw;
+  var frequency = this._getDotFrequencyHz(dotX, yCw);
+  var ctx = this._getAudioContext();
+  if (!ctx) return;
+  var now = ctx.currentTime;
+  var osc = this._pressedNoteVoice.osc;
+  osc.frequency.cancelScheduledValues(now);
+  osc.frequency.setValueAtTime(Math.max(20, osc.frequency.value || frequency), now);
+  osc.frequency.exponentialRampToValueAtTime(frequency, now + 0.03);
+  this._pressedNoteVoice.xCw = dotX;
+};
+
+/**
+ * Releases active pressed-note voice using the requested fade-out duration.
+ */
+Fretscape.prototype._releasePressedNote = function (fadeSec) {
+  if (!this._pressedNoteVoice) {
+    this._pressedNotePointerId = null;
+    return;
+  }
+  var ctx = this._getAudioContext();
+  var voice = this._pressedNoteVoice;
+  this._pressedNoteVoice = null;
+  this._pressedNotePointerId = null;
+  if (!ctx || !voice.gain || !voice.osc) return;
+  var now = ctx.currentTime;
+  var releaseSec = (typeof fadeSec === "number") ? Math.max(0.01, fadeSec) : 0.1;
+  var gainNode = voice.gain.gain;
+  var current = Math.max(0.0001, gainNode.value || 0.0001);
+  gainNode.cancelScheduledValues(now);
+  gainNode.setValueAtTime(current, now);
+  gainNode.exponentialRampToValueAtTime(0.0001, now + releaseSec);
+  try {
+    voice.osc.stop(now + releaseSec + 0.04);
+  } catch (e) {
+    /* Ignore stop errors if voice has already been stopped. */
+  }
+};
+
+/**
+ * Plays a plucked tone from semitone offset where left=+1 and down=+5 from (0,0).
+ */
+Fretscape.prototype._playDotTone = function (dotX, dotY, options) {
+  var opts = options || {};
+  var frequency = this._getDotFrequencyHz(dotX, dotY);
   var ctx = this._getAudioContext();
   if (!ctx) return;
   if (ctx.state === "suspended" && ctx.resume) {
@@ -1530,6 +1634,14 @@ Fretscape.prototype._bindInput = function () {
     }
     self._pendingDragCopy = null;
   };
+  var getTouchById = function (touches, id) {
+    if (!touches || typeof touches.length !== "number") return null;
+    if (id === null || id === undefined) return touches.length ? touches[0] : null;
+    for (var i = 0; i < touches.length; i++) {
+      if (touches[i].identifier === id) return touches[i];
+    }
+    return null;
+  };
   var startDragCopyFromIndex = function (idx, pointerCw, pointerClient) {
     if (idx < 0 || idx >= self.bricks.length) return;
     var item = self.bricks[idx];
@@ -1603,6 +1715,7 @@ Fretscape.prototype._bindInput = function () {
     }
     if (isTouch && e.touches && e.touches.length >= 2) {
       cancelPendingDragCopy();
+      self._releasePressedNote(0.03);
       if (self._dragItem) {
         finishDrag();
       }
@@ -1616,8 +1729,9 @@ Fretscape.prototype._bindInput = function () {
     var cw = self._pxToCw(coords.x, coords.y);
     var dotHit = self._hitDot(cw.x, cw.y);
     if (dotHit) {
-      self._playDotTone(dotHit.xCw, dotHit.yCw);
-      queueDragCopyHold(dotHit.brickIndex, cw, coords);
+      cancelPendingDragCopy();
+      var pointerId = (isTouch && e.touches && e.touches.length) ? e.touches[0].identifier : null;
+      self._startPressedNote(dotHit.xCw, dotHit.yCw, pointerId);
       e.preventDefault();
       return;
     }
@@ -1650,6 +1764,28 @@ Fretscape.prototype._bindInput = function () {
         return;
       }
       self._touchGesture = null;
+    }
+    if (self._pressedNoteVoice) {
+      if (isTouch) {
+        var activeTouch = getTouchById(e.touches, self._pressedNotePointerId);
+        if (!activeTouch) {
+          self._releasePressedNote(0.1);
+          e.preventDefault();
+          return;
+        }
+        var touchCw = self._pxToCw(activeTouch.clientX, activeTouch.clientY);
+        self._slidePressedNoteToX(touchCw.x);
+        e.preventDefault();
+        return;
+      }
+      if (e.buttons === 0) {
+        self._releasePressedNote(0.1);
+        return;
+      }
+      var mouseCw = self._pxToCw(e.clientX, e.clientY);
+      self._slidePressedNoteToX(mouseCw.x);
+      e.preventDefault();
+      return;
     }
     if (self._pendingDragCopy) {
       if (!isTouch && e.buttons === 0) {
@@ -1688,6 +1824,18 @@ Fretscape.prototype._bindInput = function () {
       } else {
         self._beginTouchGesture(e.touches);
       }
+      e.preventDefault();
+      return;
+    }
+    if (self._pressedNoteVoice) {
+      if (isTouch) {
+        var stillActiveTouch = getTouchById(e.touches, self._pressedNotePointerId);
+        if (stillActiveTouch) {
+          e.preventDefault();
+          return;
+        }
+      }
+      self._releasePressedNote(0.1);
       e.preventDefault();
       return;
     }
