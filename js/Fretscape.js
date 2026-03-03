@@ -1332,20 +1332,40 @@ Fretscape.prototype._hitDotsAtPoint = function (xCw, yCw, hitRadiusCw) {
 
 /**
  * Returns touch-note hit candidates for a point.
- * Includes primary dot, plus adjacent-string dot(s) when overlapping both.
+ * Single-dot touches trigger one note; touches centered between adjacent strings trigger both.
  */
 Fretscape.prototype._getTouchChordHits = function (xCw, yCw) {
-  /* Slightly larger touch radius lets one fingertip overlap adjacent strings. */
-  var hits = this._hitDotsAtPoint(xCw, yCw, 0.6);
-  if (!hits.length) return [];
-  var primary = hits[0];
-  var selected = [primary];
-  for (var i = 1; i < hits.length; i++) {
-    var hit = hits[i];
-    if (Math.abs(hit.yCw - primary.yCw) !== 1) continue;
-    selected.push(hit);
+  var directHits = this._hitDotsAtPoint(xCw, yCw, 0.4);
+  if (directHits.length) {
+    return [directHits[0]];
   }
-  return selected;
+  var lowerRow = Math.floor(yCw);
+  var upperRow = Math.ceil(yCw);
+  if (upperRow - lowerRow !== 1) return [];
+  var midpointY = (lowerRow + upperRow) / 2;
+  if (Math.abs(yCw - midpointY) > 0.18) return [];
+  var touchHits = this._hitDotsAtPoint(xCw, yCw, 0.62);
+  if (!touchHits.length) return [];
+  var targetX = Math.round(xCw);
+  var pickRowHit = function (row) {
+    var best = null;
+    var bestScore = Number.POSITIVE_INFINITY;
+    for (var i = 0; i < touchHits.length; i++) {
+      var hit = touchHits[i];
+      if (hit.yCw !== row) continue;
+      var dx = Math.abs(hit.xCw - targetX);
+      var score = dx * dx + hit.distSq * 0.15;
+      if (score < bestScore) {
+        bestScore = score;
+        best = hit;
+      }
+    }
+    return best;
+  };
+  var lowerHit = pickRowHit(lowerRow);
+  var upperHit = pickRowHit(upperRow);
+  if (!lowerHit || !upperHit) return [];
+  return [lowerHit, upperHit];
 };
 
 /**
