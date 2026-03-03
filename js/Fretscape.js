@@ -1304,9 +1304,9 @@ Fretscape.prototype._hitTest = function (xCw, yCw) {
 /**
  * Returns all dot hits at (xCw, yCw), sorted nearest-first.
  */
-Fretscape.prototype._hitDotsAtPoint = function (xCw, yCw) {
-  var dotRadiusCw = 0.4; /* Keep in sync with Brick.render radius ratio. */
-  var hitRadiusSq = dotRadiusCw * dotRadiusCw;
+Fretscape.prototype._hitDotsAtPoint = function (xCw, yCw, hitRadiusCw) {
+  var radius = (typeof hitRadiusCw === "number") ? hitRadiusCw : 0.4; /* Brick.render default radius ratio. */
+  var hitRadiusSq = radius * radius;
   var hits = [];
   for (var i = this.bricks.length - 1; i >= 0; i--) {
     var item = this.bricks[i];
@@ -1335,7 +1335,8 @@ Fretscape.prototype._hitDotsAtPoint = function (xCw, yCw) {
  * Includes primary dot, plus adjacent-string dot(s) when overlapping both.
  */
 Fretscape.prototype._getTouchChordHits = function (xCw, yCw) {
-  var hits = this._hitDotsAtPoint(xCw, yCw);
+  /* Slightly larger touch radius lets one fingertip overlap adjacent strings. */
+  var hits = this._hitDotsAtPoint(xCw, yCw, 0.6);
   if (!hits.length) return [];
   var primary = hits[0];
   var selected = [primary];
