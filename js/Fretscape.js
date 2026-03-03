@@ -39,6 +39,8 @@ function Fretscape(containerEl) {
   this._pressedNoteVoice = null;
   this._pressedNotePointerId = null;
   this._touchPressedStates = {};
+  this._touchVisualVoices = [];
+  this._touchVisualAnimationFrame = null;
   this._isTwoFingerPanZoomEnabled = true;
   this._activeProgressionDegrees = null;
   this._progressionPlaybackMode = "root";
@@ -939,6 +941,52 @@ Fretscape.prototype._drawProgressionPulseIndicator = function () {
 };
 
 /**
+ * Returns currently active touch-note voices used for visual overlays.
+ */
+Fretscape.prototype._getActiveTouchVisualVoices = function () {
+  if (!this._touchVisualVoices || !this._touchVisualVoices.length) return [];
+  var active = [];
+  for (var i = 0; i < this._touchVisualVoices.length; i++) {
+    var voice = this._touchVisualVoices[i];
+    if (!voice || !voice.osc) continue;
+    active.push(voice);
+  }
+  if (active.length !== this._touchVisualVoices.length) {
+    this._touchVisualVoices = active.slice();
+  }
+  return active;
+};
+
+/**
+ * Draws blue touch overlays with opacity mapped to current note loudness.
+ */
+Fretscape.prototype._drawTouchNoteOverlays = function () {
+  var audioCtx = this._audioCtx;
+  if (!audioCtx) return;
+  var voices = this._getActiveTouchVisualVoices();
+  if (!voices.length) return;
+  var now = audioCtx.currentTime;
+  var radius = this.cellWidth * 0.4;
+  for (var i = 0; i < voices.length; i++) {
+    var voice = voices[i];
+    var loudness = this._getNoteVoiceLoudness(voice, now);
+    if (loudness <= 0.0005) continue;
+    var alpha = Math.max(0, Math.min(1, loudness));
+    var centerX = this._xCwToPx(voice.xCw);
+    var centerY = this._yCwToPx(voice.yCw);
+    this.ctx.save();
+    this.ctx.beginPath();
+    this.ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    this.ctx.fillStyle = "rgba(46, 134, 255, " + alpha.toFixed(3) + ")";
+    this.ctx.fill();
+    this.ctx.strokeStyle = "rgba(18, 76, 166, " + (Math.max(0, Math.min(1, alpha * 0.95))).toFixed(3) + ")";
+    this.ctx.lineWidth = Math.max(1, this.cellWidth * 0.015);
+    this.ctx.stroke();
+    this.ctx.restore();
+  }
+};
+
+/**
  * Starts pulse animation frames for beat-synced motion and pulsing.
  */
 Fretscape.prototype._startProgressionPulseLoop = function () {
@@ -1570,9 +1618,95 @@ Fretscape.prototype._getDotFrequencyHz = function (dotX, dotY) {
 };
 
 /**
+ * Removes a voice from the touch-visual overlay registry.
+ */
+Fretscape.prototype._removeTouchVisualVoice = function (voice) {
+  if (!voice || !this._touchVisualVoices || !this._touchVisualVoices.length) return;
+  for (var i = this._touchVisualVoices.length - 1; i >= 0; i--) {
+    if (this._touchVisualVoices[i] !== voice) continue;
+    this._touchVisualVoices.splice(i, 1);
+  }
+};
+
+/**
+ * Interpolates exponential gain ramps.
+ */
+Fretscape.prototype._interpExpGain = function (startGain, endGain, t) {
+  var s = Math.max(0.0001, startGain);
+  var e = Math.max(0.0001, endGain);
+  var clamped = Math.max(0, Math.min(1, t));
+  return s * Math.pow(e / s, clamped);
+};
+
+/**
+ * Estimates current gain value for a pressed-note voice at a given audio time.
+ */
+Fretscape.prototype._getNoteVoiceGainAtTime = function (voice, nowSec) {
+  if (!voice) return 0;
+  var minGain = (typeof voice.minGain === "number") ? voice.minGain : 0.0001;
+  var peakGain = (typeof voice.peakGain === "number") ? voice.peakGain : 0.24;
+  if (typeof voice.releaseStartTime === "number" && typeof voice.releaseDuration === "number") {
+    if (nowSec <= voice.releaseStartTime) {
+      return this._getNoteVoiceGainAtTime({
+        noteOnTime: voice.noteOnTime,
+        attackEndTime: voice.attackEndTime,
+        fadeEndTime: voice.fadeEndTime,
+        minGain: minGain,
+        peakGain: peakGain
+      }, nowSec);
+    }
+    var relT = (nowSec - voice.releaseStartTime) / Math.max(0.01, voice.releaseDuration);
+    if (relT >= 1) return minGain;
+    var releaseStart = (typeof voice.releaseStartGain === "number") ? voice.releaseStartGain : peakGain;
+    return this._interpExpGain(releaseStart, minGain, relT);
+  }
+  var noteOn = (typeof voice.noteOnTime === "number") ? voice.noteOnTime : nowSec;
+  var attackEnd = (typeof voice.attackEndTime === "number") ? voice.attackEndTime : (noteOn + 0.004);
+  var fadeEnd = (typeof voice.fadeEndTime === "number") ? voice.fadeEndTime : (noteOn + 1);
+  if (nowSec <= noteOn) return minGain;
+  if (nowSec <= attackEnd) {
+    var atkT = (nowSec - noteOn) / Math.max(0.001, attackEnd - noteOn);
+    return this._interpExpGain(minGain, peakGain, atkT);
+  }
+  if (nowSec >= fadeEnd) return minGain;
+  var fadeT = (nowSec - attackEnd) / Math.max(0.001, fadeEnd - attackEnd);
+  return this._interpExpGain(peakGain, minGain, fadeT);
+};
+
+/**
+ * Returns normalized loudness [0..1] for pressed-note voice visualization.
+ */
+Fretscape.prototype._getNoteVoiceLoudness = function (voice, nowSec) {
+  var minGain = (voice && typeof voice.minGain === "number") ? voice.minGain : 0.0001;
+  var peakGain = (voice && typeof voice.peakGain === "number") ? voice.peakGain : 0.24;
+  var gain = this._getNoteVoiceGainAtTime(voice, nowSec);
+  var loudness = (gain - minGain) / Math.max(0.0001, peakGain - minGain);
+  return Math.max(0, Math.min(1, loudness));
+};
+
+/**
+ * Starts frame loop used to refresh touch-note loudness overlays.
+ */
+Fretscape.prototype._startTouchVisualLoop = function () {
+  if (this._touchVisualAnimationFrame !== null) return;
+  var self = this;
+  var tick = function () {
+    if (!self._touchVisualVoices || !self._touchVisualVoices.length) {
+      self._touchVisualAnimationFrame = null;
+      self.render();
+      return;
+    }
+    self.render();
+    self._touchVisualAnimationFrame = window.requestAnimationFrame(tick);
+  };
+  this._touchVisualAnimationFrame = window.requestAnimationFrame(tick);
+};
+
+/**
  * Creates a pressed-note voice that fades from press and ends within one second.
  */
 Fretscape.prototype._createPressedNoteVoice = function (dotX, dotY, onEnded) {
+  var self = this;
   var ctx = this._getAudioContext();
   if (!ctx) return null;
   if (ctx.state === "suspended" && ctx.resume) {
@@ -1601,17 +1735,37 @@ Fretscape.prototype._createPressedNoteVoice = function (dotX, dotY, onEnded) {
   bodyFilter.frequency.value = 190;
   bodyFilter.Q.value = 0.9;
   bodyFilter.gain.value = 4;
+  var attackEnd = now + 0.004;
+  var fadeEnd = now + 1;
   gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(0.24, now + 0.004);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 1);
+  gain.gain.exponentialRampToValueAtTime(0.24, attackEnd);
+  gain.gain.exponentialRampToValueAtTime(0.0001, fadeEnd);
   osc.connect(toneFilter);
   toneFilter.connect(bodyFilter);
   bodyFilter.connect(gain);
   gain.connect(ctx.destination);
-  var voice = { osc: osc, gain: gain, yCw: dotY, xCw: snappedX };
-  if (typeof onEnded === "function") {
-    osc.onended = onEnded;
-  }
+  var voice = {
+    osc: osc,
+    gain: gain,
+    yCw: dotY,
+    xCw: snappedX,
+    noteOnTime: now,
+    attackEndTime: attackEnd,
+    fadeEndTime: fadeEnd,
+    peakGain: 0.24,
+    minGain: 0.0001,
+    releaseStartTime: null,
+    releaseDuration: null,
+    releaseStartGain: null
+  };
+  this._touchVisualVoices.push(voice);
+  this._startTouchVisualLoop();
+  osc.onended = function () {
+    self._removeTouchVisualVoice(voice);
+    if (typeof onEnded === "function") {
+      onEnded(voice);
+    }
+  };
   osc.start(now);
   osc.stop(now + 1.06);
   return voice;
@@ -1640,11 +1794,17 @@ Fretscape.prototype._slideNoteVoiceToX = function (voice, dotX) {
  */
 Fretscape.prototype._releaseNoteVoice = function (voice, fadeSec) {
   if (!voice || !voice.gain || !voice.osc) return;
+  if (typeof voice.releaseStartTime === "number") return;
   var ctx = this._getAudioContext();
   if (!ctx) return;
   var now = ctx.currentTime;
   var releaseSec = (typeof fadeSec === "number") ? Math.max(0.01, fadeSec) : 0.1;
+  var releaseStartGain = Math.max(0.0001, this._getNoteVoiceGainAtTime(voice, now));
+  voice.releaseStartTime = now;
+  voice.releaseDuration = releaseSec;
+  voice.releaseStartGain = releaseStartGain;
   var gainNode = voice.gain.gain;
+  this._startTouchVisualLoop();
   if (typeof gainNode.cancelAndHoldAtTime === "function") {
     gainNode.cancelAndHoldAtTime(now);
   } else {
@@ -1666,8 +1826,8 @@ Fretscape.prototype._releaseNoteVoice = function (voice, fadeSec) {
 Fretscape.prototype._startPressedNote = function (dotX, dotY, pointerId) {
   var self = this;
   this._releasePressedNote(0.02);
-  var voice = this._createPressedNoteVoice(dotX, dotY, function () {
-    if (self._pressedNoteVoice === voice) {
+  var voice = this._createPressedNoteVoice(dotX, dotY, function (endedVoice) {
+    if (self._pressedNoteVoice === endedVoice) {
       self._pressedNoteVoice = null;
       self._pressedNotePointerId = null;
     }
@@ -1924,18 +2084,16 @@ Fretscape.prototype._bindInput = function () {
         }
         var voice = self._createPressedNoteVoice(
           (typeof winnerData.startX === "number") ? winnerData.startX : winnerData.slideX,
-          (typeof winnerData.startY === "number") ? winnerData.startY : winnerData.row
-        );
-        winnerState.rows[winnerRowKey] = voice;
-        if (voice && voice.osc) {
-          (function (stateRef, rowKey, voiceRef) {
-            voiceRef.osc.onended = function () {
-              if (stateRef.rows && stateRef.rows[rowKey] === voiceRef) {
+          (typeof winnerData.startY === "number") ? winnerData.startY : winnerData.row,
+          (function (stateRef, rowKey) {
+            return function (endedVoice) {
+              if (stateRef.rows && stateRef.rows[rowKey] === endedVoice) {
                 delete stateRef.rows[rowKey];
               }
             };
-          })(winnerState, winnerRowKey, voice);
-        }
+          })(winnerState, winnerRowKey)
+        );
+        winnerState.rows[winnerRowKey] = voice;
       }
     }
     return true;
@@ -2403,6 +2561,7 @@ Fretscape.prototype.render = function () {
     var stepY = this._isVerticallyMirrored ? -this.cellWidth : this.cellWidth;
     item.brick.render(this.ctx, this._xCwToPx(item.xCw), this._yCwToPx(item.yCw), stepX, stepY);
   }
+  this._drawTouchNoteOverlays();
   this._drawProgressionRootGuide();
   this._drawProgressionRootToFifthGuide();
   this._drawProgressionPulseIndicator();
