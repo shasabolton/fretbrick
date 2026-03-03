@@ -1331,6 +1331,34 @@ Fretscape.prototype._hitDotsAtPoint = function (xCw, yCw, hitRadiusCw) {
 };
 
 /**
+ * Returns nearest dot on a specific row near a target point.
+ */
+Fretscape.prototype._getNearestDotOnRow = function (row, xCw, yCw, maxDistSq) {
+  var best = null;
+  var bestDistSq = Number.POSITIVE_INFINITY;
+  for (var i = this.bricks.length - 1; i >= 0; i--) {
+    var item = this.bricks[i];
+    var data = item.brick && item.brick.cellData ? item.brick.cellData : [];
+    for (var r = 0; r < data.length; r++) {
+      var dotY = item.yCw + r;
+      if (dotY !== row) continue;
+      for (var c = 0; c < data[r].length; c++) {
+        var dotX = item.xCw + c;
+        var dx = xCw - dotX;
+        var dy = yCw - dotY;
+        var distSq = dx * dx + dy * dy;
+        if (typeof maxDistSq === "number" && distSq > maxDistSq) continue;
+        if (distSq < bestDistSq) {
+          bestDistSq = distSq;
+          best = { xCw: dotX, yCw: dotY, brickIndex: i, row: r, col: c, distSq: distSq };
+        }
+      }
+    }
+  }
+  return best;
+};
+
+/**
  * Returns touch-note hit candidates for a point.
  * Single-dot touches trigger one note; touches centered between adjacent strings trigger both.
  */
@@ -1343,9 +1371,8 @@ Fretscape.prototype._getTouchChordHits = function (xCw, yCw) {
   var upperRow = Math.ceil(yCw);
   if (upperRow - lowerRow !== 1) return [];
   var midpointY = (lowerRow + upperRow) / 2;
-  if (Math.abs(yCw - midpointY) > 0.18) return [];
-  var touchHits = this._hitDotsAtPoint(xCw, yCw, 0.62);
-  if (!touchHits.length) return [];
+  if (Math.abs(yCw - midpointY) > 0.28) return [];
+  var touchHits = this._hitDotsAtPoint(xCw, yCw, 0.72);
   var targetX = Math.round(xCw);
   var pickRowHit = function (row) {
     var best = null;
@@ -1364,6 +1391,23 @@ Fretscape.prototype._getTouchChordHits = function (xCw, yCw) {
   };
   var lowerHit = pickRowHit(lowerRow);
   var upperHit = pickRowHit(upperRow);
+  if (!lowerHit) {
+    lowerHit = this._getNearestDotOnRow(lowerRow, xCw, yCw, 1.9);
+  }
+  if (!upperHit) {
+    upperHit = this._getNearestDotOnRow(upperRow, xCw, yCw, 1.9);
+  }
+  if (!lowerHit || !upperHit) {
+    return lowerHit ? [lowerHit] : (upperHit ? [upperHit] : []);
+  }
+  if (Math.abs(lowerHit.xCw - upperHit.xCw) > 1) {
+    var upperSnapped = this._getNearestDotOnRow(upperRow, lowerHit.xCw, yCw, 2.2);
+    if (upperSnapped) upperHit = upperSnapped;
+  }
+  if (Math.abs(lowerHit.xCw - upperHit.xCw) > 1) {
+    var lowerSnapped = this._getNearestDotOnRow(lowerRow, upperHit.xCw, yCw, 2.2);
+    if (lowerSnapped) lowerHit = lowerSnapped;
+  }
   if (!lowerHit || !upperHit) return [];
   return [lowerHit, upperHit];
 };
