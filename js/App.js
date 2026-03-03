@@ -9,8 +9,7 @@
   var strumPatternSelect = document.getElementById("strum-pattern-select");
   var drumPatternSelect = document.getElementById("drum-pattern-select");
   var riffSelect = document.getElementById("riff-select");
-  var bpmSlider = document.getElementById("bpm-slider");
-  var bpmReadout = document.getElementById("bpm-readout");
+  var bpmSelect = document.getElementById("bpm-select");
   var progressionPlayToggle = document.getElementById("progression-play-toggle");
   var handednessToggle = document.getElementById("handedness-toggle");
   var verticalMirrorToggle = document.getElementById("vertical-mirror-toggle");
@@ -159,16 +158,29 @@
     progressionPlayToggle.disabled = !hasPath;
   };
   /**
-   * Applies BPM slider value to Fretscape and updates the text readout.
+   * Ensures BPM dropdown has compact selectable values.
    */
-  var applyBpmFromSlider = function () {
-    var bpm = bpmSlider ? parseInt(bpmSlider.value, 10) : 100;
+  var populateBpmSelect = function () {
+    if (!bpmSelect) return;
+    while (bpmSelect.firstChild) {
+      bpmSelect.removeChild(bpmSelect.firstChild);
+    }
+    for (var bpm = 60; bpm <= 200; bpm += 5) {
+      var option = document.createElement("option");
+      option.value = String(bpm);
+      option.textContent = String(bpm);
+      if (bpm === 100) option.selected = true;
+      bpmSelect.appendChild(option);
+    }
+  };
+  /**
+   * Applies BPM dropdown value to Fretscape playback tempo.
+   */
+  var applyBpmFromSelect = function () {
+    var bpm = bpmSelect ? parseInt(bpmSelect.value, 10) : 100;
     if (!bpm || bpm < 60) bpm = 60;
     if (bpm > 200) bpm = 200;
     fretscape.setProgressionBpm(bpm);
-    if (bpmReadout) {
-      bpmReadout.textContent = bpm + " BPM";
-    }
   };
   /**
    * Updates drum dropdown with patterns loaded from drumbeats JSON.
@@ -342,14 +354,12 @@
   } else {
     fretscape.setStrumPattern(null);
   }
-  if (bpmSlider) {
-    bpmSlider.addEventListener("input", applyBpmFromSlider);
-    applyBpmFromSlider();
+  if (bpmSelect) {
+    populateBpmSelect();
+    bpmSelect.addEventListener("change", applyBpmFromSelect);
+    applyBpmFromSelect();
   } else {
     fretscape.setProgressionBpm(100);
-    if (bpmReadout) {
-      bpmReadout.textContent = "100 BPM";
-    }
   }
   fretscape.applyChordProgression(null);
   fretscape.onProgressionPlaybackStateChange = syncProgressionPlayButton;
