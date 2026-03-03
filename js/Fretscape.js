@@ -1692,6 +1692,7 @@ var DRAG_HOLD_MOVE_TOLERANCE_CW = 0.35;
  */
 Fretscape.prototype._bindInput = function () {
   var self = this;
+  var isCanvasTouchSession = false;
   var cancelPendingDragCopy = function () {
     if (!self._pendingDragCopy) return;
     if (self._pendingDragCopy.timerId !== null && self._pendingDragCopy.timerId !== undefined) {
@@ -1706,6 +1707,13 @@ Fretscape.prototype._bindInput = function () {
       if (touches[i].identifier === id) return touches[i];
     }
     return null;
+  };
+  var updateCanvasTouchSession = function (touches) {
+    if (touches && touches.length) {
+      isCanvasTouchSession = true;
+      return;
+    }
+    isCanvasTouchSession = false;
   };
   var syncTouchNoteStates = function (touches) {
     if (self._isTwoFingerPanZoomEnabled) return false;
@@ -1865,6 +1873,9 @@ Fretscape.prototype._bindInput = function () {
   var start = function (e) {
     var isTouch = e.type.indexOf("touch") === 0;
     if (!self.cellWidth) return;
+    if (isTouch) {
+      updateCanvasTouchSession(e.touches);
+    }
     if (!isTouch && e.button === 1) {
       cancelPendingDragCopy();
       self._isMousePanning = true;
@@ -1916,6 +1927,10 @@ Fretscape.prototype._bindInput = function () {
   };
   var move = function (e) {
     var isTouch = e.type.indexOf("touch") === 0;
+    if (isTouch) {
+      if (!isCanvasTouchSession) return;
+      updateCanvasTouchSession(e.touches);
+    }
     if (!isTouch && self._isMousePanning && self._panLastClient) {
       var localNow = self._clientToCanvasPx(e.clientX, e.clientY);
       var localLast = self._clientToCanvasPx(self._panLastClient.x, self._panLastClient.y);
@@ -1988,6 +2003,10 @@ Fretscape.prototype._bindInput = function () {
   };
   var end = function (e) {
     var isTouch = e.type.indexOf("touch") === 0;
+    if (isTouch && !isCanvasTouchSession) return;
+    if (isTouch) {
+      updateCanvasTouchSession(e.touches);
+    }
     if (!isTouch && self._isMousePanning) {
       self._isMousePanning = false;
       self._panLastClient = null;
