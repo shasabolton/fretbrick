@@ -45,8 +45,12 @@
       letter-spacing: 0.02em;
       opacity: 0.9;
     }
+    .toolbar-field.compact {
+      width: max-content;
+    }
     .toolbar-field.compact select {
-      width: 92px;
+      width: 100%;
+      min-width: 0;
     }
     .toolbar-field.medium select {
       width: 170px;
@@ -73,8 +77,22 @@
     .toolbar select,
     .toolbar button {
       font: inherit;
-      padding: 4px 7px;
-      height: 28px;
+      padding: 2px 6px;
+      height: 24px;
+    }
+    .toolbar select {
+      line-height: 1.1;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      text-wrap: wrap;
+    }
+    .toolbar option {
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    #key-select,
+    #bpm-select {
+      width: 4.2ch;
     }
     .canvas-wrap {
       flex: 1;
