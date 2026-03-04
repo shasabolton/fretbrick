@@ -58,6 +58,7 @@ function Fretscape(containerEl) {
   this._progressionGuidePairTo = null;
   this._activeRiff = null;
   this._activeRiffBeats = null;
+  this._activeRiffEvents = null;
   this._activeStrumPattern = null;
   this._activeStrumBeats = null;
   this._activeStrumTimeline = null;
@@ -207,15 +208,32 @@ Fretscape.prototype.setRiffPattern = function (riff) {
   if (!riff || typeof riff !== "object") {
     this._activeRiff = null;
     this._activeRiffBeats = null;
+    this._activeRiffEvents = null;
     this._clearProgressionPulse();
     this.render();
     return;
   }
-  var riffString = "";
-  if (typeof riff.notes === "string") riffString = riff.notes;
-  else if (typeof riff.tab === "string") riffString = riff.tab;
+
+  // retain raw riff reference for callbacks/inspector
   this._activeRiff = riff;
-  this._activeRiffBeats = this._parseRiffNotes(riffString);
+
+  // if the riff already contains an array of event objects we can play it back
+  // more accurately.  events are expected to look like:
+  //   { xCw: <cell>, yCw: <cell>, timeMs: <ms since riff start> }
+  if (Array.isArray(riff.events)) {
+    // clone to avoid accidental mutation
+    this._activeRiffEvents = riff.events.slice();
+    // legacy beat-array is no longer needed when we have event data
+    this._activeRiffBeats = null;
+  } else {
+    this._activeRiffEvents = null;
+    // fall back to old notes/tab string format for compatibility
+    var riffString = "";
+    if (typeof riff.notes === "string") riffString = riff.notes;
+    else if (typeof riff.tab === "string") riffString = riff.tab;
+    this._activeRiffBeats = this._parseRiffNotes(riffString);
+  }
+
   if (!this._isProgressionPlaying) {
     this._clearProgressionPulse();
   }
@@ -277,12 +295,19 @@ Fretscape.prototype._recordNote = function (xCw, yCw) {
  * Only records first 4 beats (one chord cycle).
  */
 Fretscape.prototype._getRiffFromRecording = function () {
+  // when we capture actual notes we keep the original timing information
   if (!this._recordedNotes.length) return null;
+
+  // copy events as-is so that consumers can schedule them later
+  var events = this._recordedNotes.slice();
+
+  // still generate a legacy notes string so older code or external data
+  // consumers can inspect something similar to the previous behaviour.
   var beatMs = (60000 / this._progressionBpm) * this._progressionBeatsPerChord;
   var beatsByRow = {};
   var allYValues = [];
-  for (var n = 0; n < this._recordedNotes.length; n++) {
-    var note = this._recordedNotes[n];
+  for (var n = 0; n < events.length; n++) {
+    var note = events[n];
     var y = note.yCw;
     var beatIndex = Math.floor(note.timeMs / beatMs);
     if (beatIndex > 3) continue;
@@ -309,12 +334,15 @@ Fretscape.prototype._getRiffFromRecording = function () {
     if (notesString) notesString += ",";
     notesString += "(" + row + "," + sequence + ")";
   }
+
   var riffId = "recorded_" + String(Date.now());
-  return {
+  var result = {
     id: riffId,
     name: "Recorded riff",
-    notes: notesString
+    notes: notesString,
+    events: events
   };
+  return result;
 };
 
 /**
@@ -828,7 +856,30 @@ Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootEntries) 
   var tokenCell = this._resolveBassRunTokenCell(shape, token);
   var noteEvents = [];
   var noteCells = [];
-  if (this._activeRiffBeats && this._activeRiffBeats.length === 4) {
+
+  // If we've recorded or loaded actual event data, use that rather than
+  // the legacy 4-beat grid.  Events contain absolute world coordinates
+  // (xCw/yCw) and a timestamp in milliseconds relative to the start of the
+  // riff.  We convert times to beat offsets so they can be scheduled inside
+  // the existing progression loop.
+  if (this._activeRiffEvents && this._activeRiffEvents.length) {
+    var beatMs = 60000 / this._progressionBpm; // one beat duration
+    for (var ei = 0; ei < this._activeRiffEvents.length; ei++) {
+      var ev = this._activeRiffEvents[ei];
+      var eventBeatTime = ev.timeMs / beatMs;
+      // if the event falls within the current beat window (beatIndex is global)
+      if (eventBeatTime >= beatIndex && eventBeatTime < beatIndex + 1) {
+        var delay = eventBeatTime - beatIndex;
+        // use the recorded world coordinate directly
+        var point = { xCw: ev.xCw, yCw: ev.yCw };
+        noteCells.push(point);
+        noteEvents.push({ cell: point, delayBeats: delay, durationBeats: 0.25 });
+      }
+    }
+  }
+
+  // legacy per-beat riff grid (4 beats per chord)
+  if (!noteCells.length && this._activeRiffBeats && this._activeRiffBeats.length === 4) {
     var riffBeat = this._activeRiffBeats[beatInChord % 4];
     if (riffBeat && riffBeat.length) {
       for (var r = 0; r < riffBeat.length; r++) {

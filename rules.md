@@ -6,6 +6,8 @@ Put classes in separate files
 
 make a riffs selector drop down from the data>riffs file
 riff.notes is a string of coordinates.
+
+A recorded riff may also include an `events` array containing objects with exact playback data. Each event looks like `{ xCw: <cell>, yCw: <cell>, timeMs: <milliseconds> }` allowing MIDI‑style timing and direct world coordinates.
 designated as follows
 (y=direction in fret space relative to root of current chord not key, x=frets up or down per beat 1 2 3 4)
 +ve y and x means up in tone in fret space
