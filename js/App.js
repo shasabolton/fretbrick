@@ -144,7 +144,11 @@
       fretscape.setRiffPattern(null);
       return;
     }
-    fretscape.setRiffPattern(getRiffById(riffSelect.value));
+    var riff = getRiffById(riffSelect.value);
+    fretscape.setRiffPattern(riff);
+    if (riff && riff.notes) {
+      alert("Riff data:\n\n" + JSON.stringify(riff, null, 2));
+    }
   };
   /**
    * Keeps the progression play button label/state in sync with playback and selection.
@@ -363,11 +367,37 @@
   }
   fretscape.applyChordProgression(null);
   fretscape.onProgressionPlaybackStateChange = syncProgressionPlayButton;
+  fretscape.onRiffRecorded = function (riff) {
+    if (!riff || !riff.notes) return;
+    riffs.push(riff);
+    populateRiffSelect(riffs);
+    if (riffSelect) {
+      riffSelect.value = riff.id;
+      applySelectedRiff();
+    }
+  };
+  var recordToggle = document.getElementById("record-toggle");
+  var isRecordArmed = false;
+  var syncRecordButton = function () {
+    if (!recordToggle) return;
+    recordToggle.textContent = isRecordArmed ? "Recording (armed)" : "Arm record";
+    recordToggle.setAttribute("aria-pressed", isRecordArmed ? "true" : "false");
+  };
+  if (recordToggle) {
+    recordToggle.addEventListener("click", function () {
+      isRecordArmed = !isRecordArmed;
+      fretscape.setRecordMode(isRecordArmed);
+      syncRecordButton();
+    });
+  }
   if (progressionPlayToggle) {
     progressionPlayToggle.addEventListener("click", function () {
       if (fretscape.isProgressionPlaybackActive()) {
         fretscape.stopProgressionPlayback();
       } else {
+        if (isRecordArmed) {
+          fretscape.startRecording();
+        }
         fretscape.startProgressionPlayback();
       }
       syncProgressionPlayButton();

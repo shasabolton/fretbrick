@@ -65,7 +65,12 @@ function Fretscape(containerEl) {
   this._progressionBpm = 100;
   this._progressionBeatsPerChord = 4;
   this._drumEngine = null;
+  this._recordModeArmed = false;
+  this._isRecording = false;
+  this._recordedNotes = [];
+  this._recordStartTime = null;
   this.onProgressionPlaybackStateChange = null;
+  this.onRiffRecorded = null;
   var self = this;
   window.addEventListener("resize", function () { self.render(); });
   this._bindInput();
@@ -218,7 +223,102 @@ Fretscape.prototype.setRiffPattern = function (riff) {
 };
 
 /**
- * Normalizes a strum beat token so it only contains d/u/s/- symbols.
+ * Arms or disarms recording mode.
+ */
+Fretscape.prototype.setRecordMode = function (armed) {
+  this._recordModeArmed = !!armed;
+  if (!armed) {
+    this._isRecording = false;
+    this._recordedNotes = [];
+    this._recordStartTime = null;
+  }
+};
+
+/**
+ * Starts recording. Called when play is pressed while record is armed.
+ */
+Fretscape.prototype.startRecording = function () {
+  if (!this._recordModeArmed) return;
+  this._isRecording = true;
+  this._recordedNotes = [];
+  this._recordStartTime = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+};
+
+/**
+ * Stops recording and returns the recorded riff data.
+ */
+Fretscape.prototype.stopRecording = function () {
+  if (!this._isRecording) return null;
+  this._isRecording = false;
+  var riff = this._getRiffFromRecording();
+  this._recordedNotes = [];
+  this._recordStartTime = null;
+  return riff;
+};
+
+/**
+ * Records a note event during recording.
+ */
+Fretscape.prototype._recordNote = function (xCw, yCw) {
+  if (!this._isRecording || !this._recordStartTime) return;
+  var now = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+  var elapsedMs = now - this._recordStartTime;
+  this._recordedNotes.push({
+    xCw: Math.round(xCw),
+    yCw: Math.round(yCw),
+    timeMs: elapsedMs
+  });
+};
+
+/**
+ * Converts recorded notes into riff format.
+ * Format: "(y,sequence)" where sequence is x coordinates across 4 beats.
+ * Beat duration based on BPM: beatMs = (60000 / BPM) * 4 (4 beats per chord)
+ * Only records first 4 beats (one chord cycle).
+ */
+Fretscape.prototype._getRiffFromRecording = function () {
+  if (!this._recordedNotes.length) return null;
+  var beatMs = (60000 / this._progressionBpm) * this._progressionBeatsPerChord;
+  var beatsByRow = {};
+  var allYValues = [];
+  for (var n = 0; n < this._recordedNotes.length; n++) {
+    var note = this._recordedNotes[n];
+    var y = note.yCw;
+    var beatIndex = Math.floor(note.timeMs / beatMs);
+    if (beatIndex > 3) continue;
+    if (beatIndex < 0) beatIndex = 0;
+    if (!beatsByRow[y]) {
+      beatsByRow[y] = [{}, {}, {}, {}];
+      allYValues.push(y);
+    }
+    if (!beatsByRow[y][beatIndex][note.timeMs]) {
+      beatsByRow[y][beatIndex][note.timeMs] = note.xCw;
+    }
+  }
+  var notesString = "";
+  allYValues.sort(function (a, b) { return a - b; });
+  for (var i = 0; i < allYValues.length; i++) {
+    var row = allYValues[i];
+    var sequence = "";
+    var rowBeats = beatsByRow[row];
+    for (var b = 0; b < 4; b++) {
+      var beatNotes = rowBeats[b];
+      var times = Object.keys(beatNotes).sort(function (a, b) { return parseInt(a, 10) - parseInt(b, 10); });
+      sequence += times.length ? String(beatNotes[times[0]]) : "-";
+    }
+    if (notesString) notesString += ",";
+    notesString += "(" + row + "," + sequence + ")";
+  }
+  var riffId = "recorded_" + String(Date.now());
+  return {
+    id: riffId,
+    name: "Recorded riff",
+    notes: notesString
+  };
+};
+
+/**
+ * Applies selected riff object. notes/tab string maps fretspace coordinates per beat.
  */
 Fretscape.prototype._normalizeStrumBeatToken = function (token) {
   var raw = String(token || "").toLowerCase().replace(/\s+/g, "");
@@ -1128,6 +1228,11 @@ Fretscape.prototype.startProgressionPlayback = function () {
  */
 Fretscape.prototype.stopProgressionPlayback = function () {
   var wasPlaying = this._isProgressionPlaying;
+  var wasRecording = this._isRecording;
+  var recordedRiff = null;
+  if (wasRecording) {
+    recordedRiff = this.stopRecording();
+  }
   if (this._progressionBeatTimer !== null) {
     window.clearInterval(this._progressionBeatTimer);
     this._progressionBeatTimer = null;
@@ -1143,6 +1248,9 @@ Fretscape.prototype.stopProgressionPlayback = function () {
   this._stopProgressionPulseLoop();
   if (wasPlaying) {
     this._notifyProgressionPlaybackStateChange();
+  }
+  if (recordedRiff && typeof this.onRiffRecorded === "function") {
+    this.onRiffRecorded(recordedRiff);
   }
   this.render();
 };
@@ -1832,6 +1940,7 @@ Fretscape.prototype._releaseNoteVoice = function (voice, fadeSec) {
 Fretscape.prototype._startPressedNote = function (dotX, dotY, pointerId) {
   var self = this;
   this._releasePressedNote(0.02);
+  this._recordNote(dotX, dotY);
   var voice = this._createPressedNoteVoice(dotX, dotY, function (endedVoice) {
     if (self._pressedNoteVoice === endedVoice) {
       self._pressedNoteVoice = null;
