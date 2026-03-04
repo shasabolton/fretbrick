@@ -334,7 +334,7 @@
   if (playbackModeSelect) {
     fretscape.setProgressionPlaybackMode(playbackModeSelect.value || "root");
     playbackModeSelect.addEventListener("change", function () {
-      fretscape.setProgressionPlaybackMode(playbackModeSelect.value || "root");
+      fretscape.setProgressionPlaybackMode(playbackModeSelect.value);
       syncProgressionPlayButton();
     });
   } else {

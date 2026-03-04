@@ -560,6 +560,11 @@ Fretscape.prototype._getCshape1351ForDegreeToken = function (degreeToken, fallba
  */
 Fretscape.prototype._getBassRunSpec = function () {
   var specs = {
+    "silent": {
+      sequence: [],
+      shapeStrategy: "default",
+      guideSequence: []
+    },
     "root": {
       sequence: ["root", "root", "root", "root"],
       shapeStrategy: "default",
@@ -719,7 +724,7 @@ Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootEntries) 
   var shapeSpec = hasStrum ? { shapeStrategy: "cshape1351" } : spec;
   var shape = this._getBassRunShapeForChordIndex(rootEntries, chordIndex, shapeSpec);
   if (!shape) return null;
-  var token = hasStrum ? "hold" : spec.sequence[beatInChord % spec.sequence.length];
+  var token = hasStrum ? "hold" : (this._progressionPlaybackMode === "silent" ? "rest" : spec.sequence[beatInChord % spec.sequence.length]);
   var tokenCell = this._resolveBassRunTokenCell(shape, token);
   var noteEvents = [];
   var noteCells = [];
@@ -778,10 +783,11 @@ Fretscape.prototype._interpolateCell = function (startCell, endCell, t) {
 };
 
 /**
- * Sets bass playback mode. Supported: "root", "root5th", "arpeggio135", "eshape513", "cshape1351".
+ * Sets bass playback mode. Supported: "silent", "root", "root5th", "arpeggio135", "eshape513", "cshape1351".
  */
 Fretscape.prototype.setProgressionPlaybackMode = function (mode) {
   var normalized = "root";
+  if (mode === "silent") normalized = "silent";
   if (mode === "root5th") normalized = "root5th";
   if (mode === "arpeggio135") normalized = "arpeggio135";
   if (mode === "eshape513") normalized = "eshape513";
