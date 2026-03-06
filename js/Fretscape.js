@@ -888,19 +888,29 @@ Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootEntries) 
   // can be scheduled inside the existing progression loop.
   if (this._activeRiffEvents && this._activeRiffEvents.length) {
     var beatMs = 60000 / this._progressionBpm; // one beat duration
+    var beatStartMs = beatIndex * beatMs;
+    var beatEndMs = (beatIndex + 1) * beatMs;
     for (var ei = 0; ei < this._activeRiffEvents.length; ei++) {
       var ev = this._activeRiffEvents[ei];
-      var eventBeatTime = ev.timeMs / beatMs;
-      // if the event falls within the current beat window (beatIndex is global)
-      if (eventBeatTime >= beatIndex && eventBeatTime < beatIndex + 1) {
-        var delay = eventBeatTime - beatIndex;
-        var duration = (typeof ev.durationMs === "number" && ev.durationMs > 0)
-          ? ev.durationMs / beatMs
-          : 0.25;  // fallback for events without duration
+      var eventStartMs = ev.timeMs;
+      var eventDurationMs = (typeof ev.durationMs === "number" && ev.durationMs > 0)
+        ? ev.durationMs
+        : 0.25 * beatMs;  // fallback duration
+      var eventEndMs = eventStartMs + eventDurationMs;
+
+      // Check if this event is active during the current beat (overlaps)
+      if (eventStartMs < beatEndMs && eventEndMs > beatStartMs) {
         // use the recorded world coordinate directly
         var point = { xCw: ev.xCw, yCw: ev.yCw };
         noteCells.push(point);
-        noteEvents.push({ cell: point, delayBeats: delay, durationBeats: duration });
+
+        // Only schedule note events for events that start in this beat
+        var eventBeatTime = ev.timeMs / beatMs;
+        if (eventBeatTime >= beatIndex && eventBeatTime < beatIndex + 1) {
+          var delay = eventBeatTime - beatIndex;
+          var duration = eventDurationMs / beatMs;
+          noteEvents.push({ cell: point, delayBeats: delay, durationBeats: duration });
+        }
       }
     }
   }
