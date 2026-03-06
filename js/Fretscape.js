@@ -70,6 +70,7 @@ function Fretscape(containerEl) {
   this._isRecording = false;
   this._recordedNotes = [];
   this._recordStartTime = null;
+  this._recordingNotesMap = null;  /* Maps pointerId -> recorded note event object */
   this.onProgressionPlaybackStateChange = null;
   this.onRiffRecorded = null;
   var self = this;
@@ -259,6 +260,7 @@ Fretscape.prototype.startRecording = function () {
   if (!this._recordModeArmed) return;
   this._isRecording = true;
   this._recordedNotes = [];
+  this._recordingNotesMap = {};
   this._recordStartTime = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
 };
 
@@ -270,22 +272,44 @@ Fretscape.prototype.stopRecording = function () {
   this._isRecording = false;
   var riff = this._getRiffFromRecording();
   this._recordedNotes = [];
+  this._recordingNotesMap = null;
   this._recordStartTime = null;
   return riff;
 };
 
 /**
- * Records a note event during recording.
+ * Records a note press during recording. Returns an event object that can be updated
+ * with duration when the note is released.
  */
-Fretscape.prototype._recordNote = function (xCw, yCw) {
-  if (!this._isRecording || !this._recordStartTime) return;
+Fretscape.prototype._recordNote = function (xCw, yCw, pointerId) {
+  if (!this._isRecording || !this._recordStartTime) return null;
   var now = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
   var elapsedMs = now - this._recordStartTime;
-  this._recordedNotes.push({
+  var eventObj = {
     xCw: Math.round(xCw),
     yCw: Math.round(yCw),
-    timeMs: elapsedMs
-  });
+    timeMs: elapsedMs,
+    durationMs: 0  /* will be updated on release */
+  };
+  this._recordedNotes.push(eventObj);
+  /* track which pointerId corresponds to this event so we can update it on release */
+  if (this._recordingNotesMap && (pointerId !== undefined && pointerId !== null)) {
+    this._recordingNotesMap[pointerId] = eventObj;
+  }
+  return eventObj;
+};
+
+/**
+ * Records a note release during recording to capture duration.
+ */
+Fretscape.prototype._recordNoteRelease = function (pointerId) {
+  if (!this._isRecording || !this._recordStartTime || !this._recordingNotesMap) return;
+  var eventObj = this._recordingNotesMap[pointerId];
+  if (!eventObj) return;
+  var now = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+  var elapsedMs = now - this._recordStartTime;
+  eventObj.durationMs = Math.max(0, elapsedMs - eventObj.timeMs);
+  delete this._recordingNotesMap[pointerId];
 };
 
 /**
@@ -859,9 +883,9 @@ Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootEntries) 
 
   // If we've recorded or loaded actual event data, use that rather than
   // the legacy 4-beat grid.  Events contain absolute world coordinates
-  // (xCw/yCw) and a timestamp in milliseconds relative to the start of the
-  // riff.  We convert times to beat offsets so they can be scheduled inside
-  // the existing progression loop.
+  // (xCw/yCw), a timestamp in milliseconds relative to the start of the
+  // riff, and optional durationMs. We convert times to beat offsets so they
+  // can be scheduled inside the existing progression loop.
   if (this._activeRiffEvents && this._activeRiffEvents.length) {
     var beatMs = 60000 / this._progressionBpm; // one beat duration
     for (var ei = 0; ei < this._activeRiffEvents.length; ei++) {
@@ -870,10 +894,13 @@ Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootEntries) 
       // if the event falls within the current beat window (beatIndex is global)
       if (eventBeatTime >= beatIndex && eventBeatTime < beatIndex + 1) {
         var delay = eventBeatTime - beatIndex;
+        var duration = (typeof ev.durationMs === "number" && ev.durationMs > 0)
+          ? ev.durationMs / beatMs
+          : 0.25;  // fallback for events without duration
         // use the recorded world coordinate directly
         var point = { xCw: ev.xCw, yCw: ev.yCw };
         noteCells.push(point);
-        noteEvents.push({ cell: point, delayBeats: delay, durationBeats: 0.25 });
+        noteEvents.push({ cell: point, delayBeats: delay, durationBeats: duration });
       }
     }
   }
@@ -1991,7 +2018,7 @@ Fretscape.prototype._releaseNoteVoice = function (voice, fadeSec) {
 Fretscape.prototype._startPressedNote = function (dotX, dotY, pointerId) {
   var self = this;
   this._releasePressedNote(0.02);
-  this._recordNote(dotX, dotY);
+  this._recordNote(dotX, dotY, pointerId);
   var voice = this._createPressedNoteVoice(dotX, dotY, function (endedVoice) {
     if (self._pressedNoteVoice === endedVoice) {
       self._pressedNoteVoice = null;
@@ -1999,6 +2026,7 @@ Fretscape.prototype._startPressedNote = function (dotX, dotY, pointerId) {
     }
   });
   if (!voice) return false;
+  voice.pointerId = pointerId;  /* store pointerId on voice for later release tracking */
   this._pressedNoteVoice = voice;
   this._pressedNotePointerId = (pointerId === undefined || pointerId === null) ? null : pointerId;
   return true;
@@ -2021,8 +2049,10 @@ Fretscape.prototype._releasePressedNote = function (fadeSec) {
     return;
   }
   var voice = this._pressedNoteVoice;
+  var pointerId = voice.pointerId;
   this._pressedNoteVoice = null;
   this._pressedNotePointerId = null;
+  this._recordNoteRelease(pointerId);
   this._releaseNoteVoice(voice, fadeSec);
 };
 
