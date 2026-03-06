@@ -278,8 +278,7 @@ Fretscape.prototype.stopRecording = function () {
 };
 
 /**
- * Records a note press during recording. Returns an event object that can be updated
- * with duration when the note is released.
+ * Records a note event during recording.
  */
 Fretscape.prototype._recordNote = function (xCw, yCw, pointerId) {
   if (!this._isRecording || !this._recordStartTime) return null;
@@ -289,19 +288,15 @@ Fretscape.prototype._recordNote = function (xCw, yCw, pointerId) {
     xCw: Math.round(xCw),
     yCw: Math.round(yCw),
     timeMs: elapsedMs,
-    durationMs: 0  /* will be updated on release */
+    durationMs: 0
   };
   this._recordedNotes.push(eventObj);
-  /* track which pointerId corresponds to this event so we can update it on release */
   if (this._recordingNotesMap && (pointerId !== undefined && pointerId !== null)) {
     this._recordingNotesMap[pointerId] = eventObj;
   }
   return eventObj;
 };
 
-/**
- * Records a note release during recording to capture duration.
- */
 Fretscape.prototype._recordNoteRelease = function (pointerId) {
   if (!this._isRecording || !this._recordStartTime || !this._recordingNotesMap) return;
   var eventObj = this._recordingNotesMap[pointerId];
@@ -881,38 +876,11 @@ Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootEntries) 
   var noteEvents = [];
   var noteCells = [];
 
-  // If we've recorded or loaded actual event data, use that rather than
-  // the legacy 4-beat grid.  Events contain absolute world coordinates
-  // (xCw/yCw), a timestamp in milliseconds relative to the start of the
-  // riff, and optional durationMs. We convert times to beat offsets so they
-  // can be scheduled inside the existing progression loop.
+  // Event-based riffs are scheduled separately; we don't queue anything
+  // here so that the standard per-beat logic doesn't interfere.  pulse
+  // visualization relies on _riffEventVisuals instead.
   if (this._activeRiffEvents && this._activeRiffEvents.length) {
-    var beatMs = 60000 / this._progressionBpm; // one beat duration
-    var beatStartMs = beatIndex * beatMs;
-    var beatEndMs = (beatIndex + 1) * beatMs;
-    for (var ei = 0; ei < this._activeRiffEvents.length; ei++) {
-      var ev = this._activeRiffEvents[ei];
-      var eventStartMs = ev.timeMs;
-      var eventDurationMs = (typeof ev.durationMs === "number" && ev.durationMs > 0)
-        ? ev.durationMs
-        : 0.25 * beatMs;  // fallback duration
-      var eventEndMs = eventStartMs + eventDurationMs;
-
-      // Check if this event is active during the current beat (overlaps)
-      if (eventStartMs < beatEndMs && eventEndMs > beatStartMs) {
-        // use the recorded world coordinate directly
-        var point = { xCw: ev.xCw, yCw: ev.yCw };
-        noteCells.push(point);
-
-        // Only schedule note events for events that start in this beat
-        var eventBeatTime = ev.timeMs / beatMs;
-        if (eventBeatTime >= beatIndex && eventBeatTime < beatIndex + 1) {
-          var delay = eventBeatTime - beatIndex;
-          var duration = eventDurationMs / beatMs;
-          noteEvents.push({ cell: point, delayBeats: delay, durationBeats: duration });
-        }
-      }
-    }
+    // intentionally empty
   }
 
   // legacy per-beat riff grid (4 beats per chord)
@@ -1215,6 +1183,46 @@ Fretscape.prototype._stopProgressionPulseLoop = function () {
 /**
  * Plays one beat of the active progression root path and resets pulse animation.
  */
+Fretscape.prototype._scheduleRiffEvents = function () {
+  // schedule all riff events relative to audio context time; build visuals
+  if (!this._activeRiffEvents || !this._activeRiffEvents.length) return;
+  var ctx = this._getAudioContext();
+  var baseTime = ctx ? ctx.currentTime : null;
+  this._riffEventVisuals = [];
+  this._riffEventVisualsStartMs = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+  for (var ei = 0; ei < this._activeRiffEvents.length; ei++) {
+    var ev = this._activeRiffEvents[ei];
+    var delaySec = (ev.timeMs || 0) / 1000;
+    var durationSec = (ev.durationMs || 0) / 1000;
+    // schedule tone. _playDotTone accepts delaySec relative to now.
+    this._playDotTone(ev.xCw, ev.yCw, { delaySec: delaySec, durationSec: durationSec });
+    // store for visuals
+    this._riffEventVisuals.push({ xCw: ev.xCw, yCw: ev.yCw, timeMs: ev.timeMs || 0, durationMs: ev.durationMs || 0 });
+  }
+};
+
+Fretscape.prototype._drawRiffEventDots = function () {
+  if (!this._riffEventVisuals || !this._riffEventVisuals.length) return;
+  var nowMs = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+  var localMs = nowMs - this._riffEventVisualsStartMs;
+  var noteRadius = this.cellWidth * 0.4;
+  for (var i = 0; i < this._riffEventVisuals.length; i++) {
+    var ev = this._riffEventVisuals[i];
+    if (localMs < ev.timeMs || localMs > ev.timeMs + ev.durationMs) continue;
+    var centerX = this._xCwToPx(ev.xCw);
+    var centerY = this._yCwToPx(ev.yCw);
+    this.ctx.save();
+    this.ctx.beginPath();
+    this.ctx.arc(centerX, centerY, noteRadius, 0, Math.PI * 2);
+    this.ctx.fillStyle = "#2ea043";
+    this.ctx.fill();
+    this.ctx.strokeStyle = "#1f7a34";
+    this.ctx.lineWidth = Math.max(1, this.cellWidth * 0.01);
+    this.ctx.stroke();
+    this.ctx.restore();
+  }
+};
+
 Fretscape.prototype._playProgressionBeat = function () {
   var rootEntries = this._getActiveProgressionRootEntries();
   if (!rootEntries.length) {
@@ -1229,6 +1237,10 @@ Fretscape.prototype._playProgressionBeat = function () {
   }
   var currentNotes = currentPlan.noteCells && currentPlan.noteCells.length ? currentPlan.noteCells.slice() : [];
   var currentEvents = currentPlan.noteEvents && currentPlan.noteEvents.length ? currentPlan.noteEvents.slice() : [];
+  if (this._activeRiffEvents && this._activeRiffEvents.length) {
+    // explicit events are played separately
+    currentEvents = [];
+  }
   var nextNotes = (nextPlan && nextPlan.noteCells && nextPlan.noteCells.length) ? nextPlan.noteCells.slice() : [];
   var currentAnchor = currentPlan.anchorCell || (currentNotes.length ? currentNotes[0] : null);
   var nextAnchor = (nextPlan && nextPlan.anchorCell) || (nextNotes.length ? nextNotes[0] : currentAnchor);
@@ -1258,21 +1270,35 @@ Fretscape.prototype._playProgressionBeat = function () {
       : { xCw: currentAnchor.xCw, yCw: currentAnchor.yCw };
     this._progressionPulseFromCells = [];
     this._progressionPulseToCells = [];
-    if (currentNotes.length) {
-      for (var i = 0; i < currentNotes.length; i++) {
-        this._progressionPulseFromCells.push({ xCw: currentNotes[i].xCw, yCw: currentNotes[i].yCw });
+    // if we built a visual list for event-based riffs, use it instead of the
+    // normal pulse computation so dots don't jump between beats.
+    if (this._riffEventVisuals && this._riffEventVisuals.length) {
+      var nowMs = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+      var localMs = nowMs - this._riffEventVisualsStartMs;
+      for (var vi = 0; vi < this._riffEventVisuals.length; vi++) {
+        var ev = this._riffEventVisuals[vi];
+        if (localMs >= ev.timeMs && localMs <= ev.timeMs + ev.durationMs) {
+          this._progressionPulseFromCells.push({ xCw: ev.xCw, yCw: ev.yCw });
+          this._progressionPulseToCells.push({ xCw: ev.xCw, yCw: ev.yCw });
+        }
       }
     } else {
-      this._progressionPulseFromCells.push({ xCw: currentAnchor.xCw, yCw: currentAnchor.yCw });
-    }
-    if (nextNotes.length) {
-      for (var j = 0; j < nextNotes.length; j++) {
-        this._progressionPulseToCells.push({ xCw: nextNotes[j].xCw, yCw: nextNotes[j].yCw });
+      if (currentNotes.length) {
+        for (var i = 0; i < currentNotes.length; i++) {
+          this._progressionPulseFromCells.push({ xCw: currentNotes[i].xCw, yCw: currentNotes[i].yCw });
+        }
+      } else {
+        this._progressionPulseFromCells.push({ xCw: currentAnchor.xCw, yCw: currentAnchor.yCw });
       }
-    } else if (nextAnchor) {
-      this._progressionPulseToCells.push({ xCw: nextAnchor.xCw, yCw: nextAnchor.yCw });
-    } else {
-      this._progressionPulseToCells.push({ xCw: currentAnchor.xCw, yCw: currentAnchor.yCw });
+      if (nextNotes.length) {
+        for (var j = 0; j < nextNotes.length; j++) {
+          this._progressionPulseToCells.push({ xCw: nextNotes[j].xCw, yCw: nextNotes[j].yCw });
+        }
+      } else if (nextAnchor) {
+        this._progressionPulseToCells.push({ xCw: nextAnchor.xCw, yCw: nextAnchor.yCw });
+      } else {
+        this._progressionPulseToCells.push({ xCw: currentAnchor.xCw, yCw: currentAnchor.yCw });
+      }
     }
   } else {
     this._clearProgressionPulse();
@@ -1304,6 +1330,10 @@ Fretscape.prototype.startProgressionPlayback = function () {
   this._progressionBeatIndex = 0;
   if (this._drumEngine && typeof this._drumEngine.reset === "function") {
     this._drumEngine.reset();
+  }
+  // schedule riff events if present (this also primes visuals)
+  if (this._activeRiffEvents && this._activeRiffEvents.length) {
+    this._scheduleRiffEvents();
   }
   this._playProgressionBeat();
   this._restartProgressionBeatTimer();
@@ -2036,7 +2066,7 @@ Fretscape.prototype._startPressedNote = function (dotX, dotY, pointerId) {
     }
   });
   if (!voice) return false;
-  voice.pointerId = pointerId;  /* store pointerId on voice for later release tracking */
+  voice.pointerId = pointerId;
   this._pressedNoteVoice = voice;
   this._pressedNotePointerId = (pointerId === undefined || pointerId === null) ? null : pointerId;
   return true;
@@ -2770,6 +2800,10 @@ Fretscape.prototype.render = function () {
   this._drawTouchNoteOverlays();
   this._drawProgressionRootGuide();
   this._drawProgressionRootToFifthGuide();
-  this._drawProgressionPulseIndicator();
+  if (this._activeRiffEvents && this._activeRiffEvents.length) {
+    this._drawRiffEventDots();
+  } else {
+    this._drawProgressionPulseIndicator();
+  }
   this.ctx.setTransform(1, 0, 0, 1, 0, 0);
 };
