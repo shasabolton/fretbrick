@@ -3,12 +3,19 @@
       {
         "id":"1,5 double stop, hammer 6 2",
         "name":"1,5 double stop, hammer 6 2",
-        "notes":"(0,0002),(-1,0200)"
+        "notes":"(0,0002),(-1,0200)",
+        "context":"chord"
       },
       {
         "id": "empty",
         "name": "empty",
         "tab":"(0,----)"
+      },
+      {
+        "id": "majorScale",
+        "name": "major scale",
+        "tab":"(0,024----0),(1,---024),(-1,------4-)",
+        "context":"key"
       }
       ]
 }
