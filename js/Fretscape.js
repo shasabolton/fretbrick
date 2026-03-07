@@ -1166,10 +1166,9 @@ Fretscape.prototype._startProgressionPulseLoop = function () {
     var beatMs = self._getProgressionBeatMs();
     self._progressionPulseProgress = Math.max(0, Math.min(1, (now - self._progressionPulseStartMs) / beatMs));
     self.render();
-    // Use setTimeout for slower frame rate (30fps) instead of requestAnimationFrame
-    self._progressionAnimationFrame = setTimeout(tick, 1000 / 30);
+    self._progressionAnimationFrame = window.requestAnimationFrame(tick);
   };
-  this._progressionAnimationFrame = setTimeout(tick, 1000 / 30);
+  this._progressionAnimationFrame = window.requestAnimationFrame(tick);
 };
 
 /**
@@ -1177,7 +1176,7 @@ Fretscape.prototype._startProgressionPulseLoop = function () {
  */
 Fretscape.prototype._stopProgressionPulseLoop = function () {
   if (this._progressionAnimationFrame === null) return;
-  clearTimeout(this._progressionAnimationFrame);
+  window.cancelAnimationFrame(this._progressionAnimationFrame);
   this._progressionAnimationFrame = null;
 };
 
@@ -1207,51 +1206,76 @@ Fretscape.prototype._drawRiffEventDots = function () {
   var nowMs = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
   var localMs = nowMs - this._riffEventVisualsStartMs;
   var noteRadius = this.cellWidth * 0.4;
+  var drawX = null;
+  var drawY = null;
+
+  // Find the current active event
+  var currentIndex = -1;
   for (var i = 0; i < this._riffEventVisuals.length; i++) {
     var ev = this._riffEventVisuals[i];
-    var drawX = ev.xCw;
-    var drawY = ev.yCw;
-    var shouldDraw = false;
-
-    // If the event is currently active, draw at its position
     if (localMs >= ev.timeMs && localMs <= ev.timeMs + ev.durationMs) {
-      shouldDraw = true;
+      currentIndex = i;
+      break;
     }
-    // If the event has finished and there's a next event, animate to the next position
-    else if (localMs > ev.timeMs + ev.durationMs && i < this._riffEventVisuals.length - 1) {
-      var nextEv = this._riffEventVisuals[i + 1];
-      if (localMs < nextEv.timeMs) {
-        // Calculate animation progress
-        var travelStart = ev.timeMs + ev.durationMs;
-        var travelDuration = nextEv.timeMs - travelStart;
-        if (travelDuration > 0) {
-          var travelProgress = (localMs - travelStart) / travelDuration;
-          travelProgress = Math.max(0, Math.min(1, travelProgress));
-          // Interpolate position
-          drawX = ev.xCw + (nextEv.xCw - ev.xCw) * travelProgress;
-          drawY = ev.yCw + (nextEv.yCw - ev.yCw) * travelProgress;
-          shouldDraw = true;
-        }
+  }
+
+  if (currentIndex >= 0) {
+    // Draw at the active event's position
+    drawX = this._riffEventVisuals[currentIndex].xCw;
+    drawY = this._riffEventVisuals[currentIndex].yCw;
+  } else {
+    // Find the last finished event
+    var lastFinishedIndex = -1;
+    for (var i = 0; i < this._riffEventVisuals.length; i++) {
+      if (localMs > this._riffEventVisuals[i].timeMs + this._riffEventVisuals[i].durationMs) {
+        lastFinishedIndex = i;
+      } else {
+        break;
       }
     }
-    // For the last event, keep it visible after it finishes
-    else if (i === this._riffEventVisuals.length - 1 && localMs > ev.timeMs + ev.durationMs) {
-      shouldDraw = true;
+    if (lastFinishedIndex >= 0) {
+      var lastEv = this._riffEventVisuals[lastFinishedIndex];
+      var nextIndex = lastFinishedIndex + 1;
+      if (nextIndex < this._riffEventVisuals.length) {
+        var nextEv = this._riffEventVisuals[nextIndex];
+        if (localMs < nextEv.timeMs) {
+          // Animate to the next event during the gap
+          var travelStart = lastEv.timeMs + lastEv.durationMs;
+          var travelDuration = nextEv.timeMs - travelStart;
+          var travelProgress = 0;
+          if (travelDuration > 0) {
+            travelProgress = (localMs - travelStart) / travelDuration;
+            travelProgress = Math.max(0, Math.min(1, travelProgress));
+          } else {
+            travelProgress = 1;
+          }
+          drawX = lastEv.xCw + (nextEv.xCw - lastEv.xCw) * travelProgress;
+          drawY = lastEv.yCw + (nextEv.yCw - lastEv.yCw) * travelProgress;
+        } else {
+          // After the next event has started, draw at the last event's position
+          drawX = lastEv.xCw;
+          drawY = lastEv.yCw;
+        }
+      } else {
+        // After the last event, draw at the last event's position
+        drawX = lastEv.xCw;
+        drawY = lastEv.yCw;
+      }
     }
+  }
 
-    if (shouldDraw) {
-      var centerX = this._xCwToPx(drawX);
-      var centerY = this._yCwToPx(drawY);
-      this.ctx.save();
-      this.ctx.beginPath();
-      this.ctx.arc(centerX, centerY, noteRadius, 0, Math.PI * 2);
-      this.ctx.fillStyle = "#2ea043";
-      this.ctx.fill();
-      this.ctx.strokeStyle = "#1f7a34";
-      this.ctx.lineWidth = Math.max(1, this.cellWidth * 0.01);
-      this.ctx.stroke();
-      this.ctx.restore();
-    }
+  if (drawX !== null && drawY !== null) {
+    var centerX = this._xCwToPx(drawX);
+    var centerY = this._yCwToPx(drawY);
+    this.ctx.save();
+    this.ctx.beginPath();
+    this.ctx.arc(centerX, centerY, noteRadius, 0, Math.PI * 2);
+    this.ctx.fillStyle = "#2ea043";
+    this.ctx.fill();
+    this.ctx.strokeStyle = "#1f7a34";
+    this.ctx.lineWidth = Math.max(1, this.cellWidth * 0.01);
+    this.ctx.stroke();
+    this.ctx.restore();
   }
 };
 
