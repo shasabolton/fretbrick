@@ -908,16 +908,16 @@ Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootEntries) 
   // per-beat riff grid (variable beat count per riff)
   if (!noteCells.length && this._activeRiffBeats && this._activeRiffBeats.length > 0) {
     var riffBeatCount = this._activeRiffBeats.length;
-    var riffBeatIndex = beatInChord % riffBeatCount;
+    var riffBeatIndex = beatIndex % riffBeatCount;
     var riffBeat = this._activeRiffBeats[riffBeatIndex];
     
     // Determine root based on riff context property
-    var riffRoot = shape.root;
-    if (this._activeRiff && this._activeRiff.context === "key") {
-      // Use key-relative root (center of single brick) instead of chord-relative
-      riffRoot = this._getOneCellCenter();
+    var riffRoot = this._getOneCellCenter(); // default to key-relative
+    if (this._activeRiff && this._activeRiff.context === "chord") {
+      // Use chord-relative root instead of key-relative
+      riffRoot = shape.root;
     }
-    // else: context is "chord" or undefined (default), use shape.root (chord-relative)
+    // else: context is "key" or undefined (default), use key-relative root
     
     if (riffBeat && riffBeat.length) {
       for (var r = 0; r < riffBeat.length; r++) {
