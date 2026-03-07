@@ -226,6 +226,7 @@ Fretscape.prototype.setRiffPattern = function (riff) {
     this._activeRiffEvents = riff.events.slice();
     // legacy beat-array is no longer needed when we have event data
     this._activeRiffBeats = null;
+    this._needRescheduleRiff = true;
   } else {
     this._activeRiffEvents = null;
     // fall back to old notes/tab string format for compatibility
@@ -1280,6 +1281,11 @@ Fretscape.prototype._drawRiffEventDots = function () {
 };
 
 Fretscape.prototype._playProgressionBeat = function () {
+  // reschedule riff events if the riff has changed
+  if (this._needRescheduleRiff && this._activeRiffEvents && this._activeRiffEvents.length) {
+    this._scheduleRiffEvents();
+    this._needRescheduleRiff = false;
+  }
   var rootEntries = this._getActiveProgressionRootEntries();
   if (!rootEntries.length) {
     this.stopProgressionPlayback();
