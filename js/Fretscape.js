@@ -1208,18 +1208,49 @@ Fretscape.prototype._drawRiffEventDots = function () {
   var noteRadius = this.cellWidth * 0.4;
   for (var i = 0; i < this._riffEventVisuals.length; i++) {
     var ev = this._riffEventVisuals[i];
-    if (localMs < ev.timeMs || localMs > ev.timeMs + ev.durationMs) continue;
-    var centerX = this._xCwToPx(ev.xCw);
-    var centerY = this._yCwToPx(ev.yCw);
-    this.ctx.save();
-    this.ctx.beginPath();
-    this.ctx.arc(centerX, centerY, noteRadius, 0, Math.PI * 2);
-    this.ctx.fillStyle = "#2ea043";
-    this.ctx.fill();
-    this.ctx.strokeStyle = "#1f7a34";
-    this.ctx.lineWidth = Math.max(1, this.cellWidth * 0.01);
-    this.ctx.stroke();
-    this.ctx.restore();
+    var drawX = ev.xCw;
+    var drawY = ev.yCw;
+    var shouldDraw = false;
+
+    // If the event is currently active, draw at its position
+    if (localMs >= ev.timeMs && localMs <= ev.timeMs + ev.durationMs) {
+      shouldDraw = true;
+    }
+    // If the event has finished and there's a next event, animate to the next position
+    else if (localMs > ev.timeMs + ev.durationMs && i < this._riffEventVisuals.length - 1) {
+      var nextEv = this._riffEventVisuals[i + 1];
+      if (localMs < nextEv.timeMs) {
+        // Calculate animation progress
+        var travelStart = ev.timeMs + ev.durationMs;
+        var travelDuration = nextEv.timeMs - travelStart;
+        if (travelDuration > 0) {
+          var travelProgress = (localMs - travelStart) / travelDuration;
+          travelProgress = Math.max(0, Math.min(1, travelProgress));
+          // Interpolate position
+          drawX = ev.xCw + (nextEv.xCw - ev.xCw) * travelProgress;
+          drawY = ev.yCw + (nextEv.yCw - ev.yCw) * travelProgress;
+          shouldDraw = true;
+        }
+      }
+    }
+    // For the last event, keep it visible after it finishes
+    else if (i === this._riffEventVisuals.length - 1 && localMs > ev.timeMs + ev.durationMs) {
+      shouldDraw = true;
+    }
+
+    if (shouldDraw) {
+      var centerX = this._xCwToPx(drawX);
+      var centerY = this._yCwToPx(drawY);
+      this.ctx.save();
+      this.ctx.beginPath();
+      this.ctx.arc(centerX, centerY, noteRadius, 0, Math.PI * 2);
+      this.ctx.fillStyle = "#2ea043";
+      this.ctx.fill();
+      this.ctx.strokeStyle = "#1f7a34";
+      this.ctx.lineWidth = Math.max(1, this.cellWidth * 0.01);
+      this.ctx.stroke();
+      this.ctx.restore();
+    }
   }
 };
 
