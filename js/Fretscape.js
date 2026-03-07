@@ -177,13 +177,17 @@ Fretscape.prototype._fretspaceDeltaToWorldFromRoot = function (rootCell, xDelta,
 };
 
 /**
- * Parses riff note string like "(0,0002),(-1,0200)" into 4-beat fretspace offsets.
+ * Parses riff note string like "(0,0002),(-1,0200)" or "(0,024----0)" into variable-beat fretspace offsets.
+ * Beat count is determined by the longest sequence found.
  */
 Fretscape.prototype._parseRiffNotes = function (notesString) {
-  var beats = [[], [], [], []];
-  if (typeof notesString !== "string") return beats;
+  if (typeof notesString !== "string") return [];
   var re = /\(\s*(-?\d+)\s*,\s*([^)]+)\)/g;
   var match;
+  var maxBeats = 0;
+  var rowData = [];
+  
+  // First pass: find max beats and parse rows
   while ((match = re.exec(notesString))) {
     var y = parseInt(match[1], 10);
     if (isNaN(y)) continue;
@@ -191,14 +195,31 @@ Fretscape.prototype._parseRiffNotes = function (notesString) {
     if (!sequenceRaw) continue;
     var compact = sequenceRaw.replace(/\s+/g, "");
     var tokens = compact.indexOf(",") >= 0 ? compact.split(",") : compact.split("");
-    for (var i = 0; i < 4; i++) {
-      var token = i < tokens.length ? String(tokens[i] || "").trim() : "-";
+    maxBeats = Math.max(maxBeats, tokens.length);
+    rowData.push({ y: y, tokens: tokens });
+  }
+  
+  // Handle empty case
+  if (maxBeats === 0) return [];
+  
+  // Create beats array with determined size
+  var beats = [];
+  for (var i = 0; i < maxBeats; i++) {
+    beats[i] = [];
+  }
+  
+  // Second pass: populate beats with notes
+  for (var r = 0; r < rowData.length; r++) {
+    var row = rowData[r];
+    for (var i = 0; i < row.tokens.length; i++) {
+      var token = String(row.tokens[i] || "").trim();
       if (!token || token === "-") continue;
       var x = parseInt(token, 10);
       if (isNaN(x)) continue;
-      beats[i].push({ x: x, y: y });
+      beats[i].push({ x: x, y: row.y });
     }
   }
+  
   return beats;
 };
 
@@ -884,12 +905,23 @@ Fretscape.prototype._getProgressionBeatPlan = function (beatIndex, rootEntries) 
     // intentionally empty
   }
 
-  // legacy per-beat riff grid (4 beats per chord)
-  if (!noteCells.length && this._activeRiffBeats && this._activeRiffBeats.length === 4) {
-    var riffBeat = this._activeRiffBeats[beatInChord % 4];
+  // per-beat riff grid (variable beat count per riff)
+  if (!noteCells.length && this._activeRiffBeats && this._activeRiffBeats.length > 0) {
+    var riffBeatCount = this._activeRiffBeats.length;
+    var riffBeatIndex = beatInChord % riffBeatCount;
+    var riffBeat = this._activeRiffBeats[riffBeatIndex];
+    
+    // Determine root based on riff context property
+    var riffRoot = shape.root;
+    if (this._activeRiff && this._activeRiff.context === "key") {
+      // Use key-relative root (center of single brick) instead of chord-relative
+      riffRoot = this._getOneCellCenter();
+    }
+    // else: context is "chord" or undefined (default), use shape.root (chord-relative)
+    
     if (riffBeat && riffBeat.length) {
       for (var r = 0; r < riffBeat.length; r++) {
-        var point = this._fretspaceDeltaToWorldFromRoot(shape.root, riffBeat[r].x, riffBeat[r].y);
+        var point = this._fretspaceDeltaToWorldFromRoot(riffRoot, riffBeat[r].x, riffBeat[r].y);
         if (!point) continue;
         noteCells.push(point);
         noteEvents.push({ cell: point, delayBeats: 0, durationBeats: 1 });
