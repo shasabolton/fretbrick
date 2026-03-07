@@ -1217,25 +1217,26 @@ Fretscape.prototype._drawRiffEventDots = function () {
       shouldDraw = true;
     }
     // If the event has finished and there's a next event, animate to the next position
+    // (only if the next event hasn't started yet)
     else if (localMs > ev.timeMs + ev.durationMs && i < this._riffEventVisuals.length - 1) {
       var nextEv = this._riffEventVisuals[i + 1];
       if (localMs < nextEv.timeMs) {
         // Calculate animation progress
         var travelStart = ev.timeMs + ev.durationMs;
         var travelDuration = nextEv.timeMs - travelStart;
+        var travelProgress = 0;
         if (travelDuration > 0) {
-          var travelProgress = (localMs - travelStart) / travelDuration;
+          travelProgress = (localMs - travelStart) / travelDuration;
           travelProgress = Math.max(0, Math.min(1, travelProgress));
-          // Interpolate position
-          drawX = ev.xCw + (nextEv.xCw - ev.xCw) * travelProgress;
-          drawY = ev.yCw + (nextEv.yCw - ev.yCw) * travelProgress;
-          shouldDraw = true;
+        } else {
+          // For zero or negative duration, instantly move to next position
+          travelProgress = 1;
         }
+        // Interpolate position
+        drawX = ev.xCw + (nextEv.xCw - ev.xCw) * travelProgress;
+        drawY = ev.yCw + (nextEv.yCw - ev.yCw) * travelProgress;
+        shouldDraw = true;
       }
-    }
-    // For the last event, keep it visible after it finishes
-    else if (i === this._riffEventVisuals.length - 1 && localMs > ev.timeMs + ev.durationMs) {
-      shouldDraw = true;
     }
 
     if (shouldDraw) {
